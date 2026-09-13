@@ -81,6 +81,7 @@ class MDNS
 private:
    MDNSTransport         _transport;
    MDNSTransport*        _udp;
+   bool                  _waitForNetworkHardware;
    IPAddress             _ipAddress;
    MDNSDataInternal_t    _mdnsData;
    MDNSState_t           _state;
@@ -125,8 +126,10 @@ private:
    void _finishedResolvingName(char* name, const byte ipAddr[4]);
 public:
    template <typename Transport>
-   MDNS(Transport& udp)
-      : _transport(udp), _udp(&_transport)
+   MDNS(Transport& udp, bool waitForNetworkHardware = true)
+      : _transport(udp),
+        _udp(&_transport),
+        _waitForNetworkHardware(waitForNetworkHardware)
    {
       _initialize();
    }

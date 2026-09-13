@@ -165,11 +165,10 @@ int MDNS::begin(const IPAddress& ip, const char* name)
 {
    this->end();
 
-	// if we were called very soon after the board was booted, we need to give the
-	// EthernetShield (WIZnet) some time to come up. Hence, we delay until millis() is at
-	// least 3000. This is necessary, so that if we need to add a service record directly
-	// after begin, the announce packet does not get lost in the bowels of the WIZnet chip.
-	while (millis() < 3000) delay(100);
+   if (this->_waitForNetworkHardware) {
+      // Give the EthernetShield (WIZnet) time to accept an immediate announcement.
+      while (millis() < 3000) delay(100);
+   }
 
 	_ipAddress = ip;
 
@@ -499,7 +498,7 @@ MDNSError_t MDNS::_sendMDNSMessage(uint32_t /*peerAddress*/, uint32_t xid, int t
 #endif // defined(HAS_NAME_BROWSING) && HAS_NAME_BROWSING
       
       case MDNSPacketTypeNoIPv6AddrAvailable: {
-         // since the WIZnet doesn't have IPv6, we will respond with a Not Found message
+         // Return NOERROR without an AAAA record and include the available IPv4 address.
          this->_writeDNSName(this->_name, &ptr, buf, sizeof(DNSHeader_t), 1);
          
          buf[0] = buf[2] = 0x0;

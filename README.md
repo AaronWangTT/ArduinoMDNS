@@ -15,7 +15,9 @@ Release 1.1.0 is maintained for
 It adds bounded packet handling, send-error reporting, reusable responder
 lifecycle methods, and a borrowed transport abstraction for platforms without
 the Arduino `UDP` base class. Existing sketches that pass an `EthernetUDP` or
-`WiFiUDP` instance to `MDNS` remain source-compatible.
+`WiFiUDP` instance to `MDNS` remain source-compatible. Custom transports can
+pass `false` as the second constructor argument to skip the legacy WIZnet boot
+delay.
 
 ## Requirements
 
