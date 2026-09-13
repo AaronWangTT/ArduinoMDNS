@@ -119,13 +119,43 @@ void MDNS::_initialize()
    this->_name = NULL;
    this->_resolveNames[0] = NULL;
    this->_resolveNames[1] = NULL;
+   this->_nameFoundCallback = NULL;
+   this->_serviceFoundCallback = NULL;
    
    this->_lastAnnounceMillis = 0;
 }
 
 MDNS::~MDNS()
 {
-	this->_udp->stop();
+	this->end();
+}
+
+void MDNS::end()
+{
+   this->removeAllServiceRecords();
+   this->cancelResolveName();
+   this->stopDiscoveringService();
+   my_free(this->_name);
+   this->_name = NULL;
+   this->_udp->stop();
+   this->_state = MDNSStateIdle;
+   this->_lastAnnounceMillis = 0;
+}
+
+int MDNS::announce()
+{
+   if (NULL == this->_name)
+      return 0;
+
+   int success = MDNSSuccess == this->_sendMDNSMessage(
+      0, 0, MDNSPacketTypeMyIPAnswer, 0);
+   for (int index = 0; index < NumMDNSServiceRecords; ++index) {
+      if (NULL != this->_serviceRecords[index])
+         success &= MDNSSuccess == this->_sendMDNSMessage(
+            0, 0, MDNSPacketTypeServiceRecord, index);
+   }
+   this->_lastAnnounceMillis = millis();
+   return success;
 }
 
 // return values:
@@ -133,6 +163,8 @@ MDNS::~MDNS()
 // 0 otherwise
 int MDNS::begin(const IPAddress& ip, const char* name)
 {
+   this->end();
+
 	// if we were called very soon after the board was booted, we need to give the
 	// EthernetShield (WIZnet) some time to come up. Hence, we delay until millis() is at
 	// least 3000. This is necessary, so that if we need to add a service record directly

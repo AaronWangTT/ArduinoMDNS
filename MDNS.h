@@ -134,6 +134,8 @@ public:
    
    int begin(const IPAddress& ip);
    int begin(const IPAddress& ip, const char* name);
+   void end();
+   int announce();
    void run();
    
    int setName(const char* name);
