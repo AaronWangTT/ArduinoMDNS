@@ -528,6 +528,11 @@ MDNSError_t MDNS::_processMDNSQuery()
       statusCode = MDNSTryLater;
       goto errorReturn;
    }
+   if (udp_len < sizeof(DNSHeader_t) || this->_name == NULL) {
+      this->_udp->flush();
+      statusCode = MDNSInvalidArgument;
+      goto errorReturn;
+   }
 
    udpBuffer = (uint8_t*) my_malloc(udp_len);  //allocate memory to hold _remaining UDP packet
    if (NULL == udpBuffer) {
@@ -535,7 +540,10 @@ MDNSError_t MDNS::_processMDNSQuery()
       statusCode = MDNSOutOfMemory;
       goto errorReturn;
    }
-   this->_udp->read((uint8_t*)udpBuffer, udp_len);//read _remaining UDP packet from W5100/W5200 into memory
+   if (this->_udp->read(udpBuffer, udp_len) != udp_len) {
+      statusCode = MDNSInvalidArgument;
+      goto errorReturn;
+   }
    ptr = (uintptr_t)udpBuffer;
 
 #if defined(_USE_MALLOC_)
@@ -600,14 +608,24 @@ MDNSError_t MDNS::_processMDNSQuery()
          tLen = 0;
          do {
 
+
+            if (offset >= udp_len) {
+               statusCode = MDNSInvalidArgument;
+               goto errorReturn;
+            }
         	memcpy((uint8_t*)buf, (uint16_t*)(ptr+offset) ,1);
             offset += 1;
 
             rLen = buf[0];
             tLen += 1;
             
-            if (rLen > 128) {// handle DNS name compression, kinda, sorta
+            if ((rLen & 0xc0) == 0xc0) {// handle DNS name compression, kinda, sorta
 
+
+               if (offset >= udp_len) {
+                  statusCode = MDNSInvalidArgument;
+                  goto errorReturn;
+               }
 
             	memcpy((uint8_t*)buf, (uint16_t*)(ptr+offset) ,1);
             	offset += 1;
@@ -620,6 +638,10 @@ MDNSError_t MDNS::_processMDNSQuery()
                
                tLen += 1;
             } else if (rLen > 0) {
+               if (rLen > 63 || offset + rLen > udp_len) {
+                  statusCode = MDNSInvalidArgument;
+                  goto errorReturn;
+               }
                int tr = rLen, ir;
                
                while (tr > 0) {
@@ -645,6 +667,10 @@ MDNSError_t MDNS::_processMDNSQuery()
          // (for one of our services).
          // if so, we'll note to send a record
 
+         if (offset + 4 > udp_len) {
+            statusCode = MDNSInvalidArgument;
+            goto errorReturn;
+         }
          memcpy((uint8_t*)buf, (uint16_t*)(ptr+offset) ,4);
          offset += 4;
          
@@ -1016,9 +1042,9 @@ MDNSError_t MDNS::_processMDNSQuery()
 
 #endif // (defined(HAS_SERVICE_REGISTRATION) && HAS_SERVICE_REGISTRATION) || (defined(HAS_NAME_BROWSING) && HAS_NAME_BROWSING)
 
-   my_free(udpBuffer);
-
 errorReturn:
+
+   my_free(udpBuffer);
 
 #if defined(_USE_MALLOC_) 
    if (NULL != dnsHeader)
@@ -1401,6 +1427,8 @@ static int cimemcmp(const void *s1, const void *s2, size_t n)
 int MDNS::_matchStringPart(const uint8_t** pCmpStr, int* pCmpLen, const uint8_t* buf,
                                            int dataLen)
 {
+   if (*pCmpLen < dataLen)
+      return 0;
    int matches = 1;
 
    if (*pCmpLen >= dataLen)
