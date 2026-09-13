@@ -346,7 +346,7 @@ MDNSError_t MDNS::_sendMDNSMessage(uint32_t /*peerAddress*/, uint32_t xid, int t
       case MDNSPacketTypeNoIPv6AddrAvailable:
          dnsHeader->queryCount = ethutil_htons(1);
          dnsHeader->additionalCount = ethutil_htons(1);
-         dnsHeader->responseCode = 0x03;
+         dnsHeader->responseCode = 0;
          dnsHeader->authoritiveAnswer = 1;
          dnsHeader->queryResponse = 1;
          break;
@@ -715,7 +715,9 @@ MDNSError_t MDNS::_processMDNSQuery()
                if (buf[0] == 0 && buf[3] == 0x01 &&
                   (buf[2] == 0x00 || buf[2] == 0x80)) {
                   
-                  if ((0 == j && 0x01 == buf[1]) || (0 < j && (0x0c == buf[1] || 0x10 == buf[1] || 0x21 == buf[1])))
+                    if ((0 == j && (0x01 == buf[1] || 0xff == buf[1])) ||
+                       (0 < j && (0x0c == buf[1] || 0x10 == buf[1] ||
+                               0x21 == buf[1] || 0xff == buf[1])))
                      recordsAskedFor[j] = 1;
                   else if (0 == j && 0x1c == buf[1])
                      wantsIPv6Addr = 1;
@@ -1504,7 +1506,7 @@ void MDNS::_finishedResolvingName(char* name, const byte ipAddr[4])
          
       this->_nameFoundCallback(
          (const char*)name, 
-         (NULL != ipAddr) ? IPAddress(ipAddr) : INADDR_NONE
+         (NULL != ipAddr) ? IPAddress(ipAddr) : IPAddress()
       );
    }
 
