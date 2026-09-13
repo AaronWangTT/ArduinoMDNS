@@ -24,7 +24,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <Arduino.h>
-#include <Udp.h>
 
 extern "C" {
    #include <utility/EthernetUtil.h>
@@ -110,12 +109,10 @@ void my_free(void* ptr)
 #endif
 }
 
-MDNS::MDNS(UDP& udp)
+void MDNS::_initialize()
 {
    memset(&this->_mdnsData, 0, sizeof(MDNSDataInternal_t));
    memset(&this->_serviceRecords, 0, sizeof(this->_serviceRecords));
-   
-   this->_udp = &udp;
    this->_state = MDNSStateIdle;
 //   this->_sock = -1;
    

@@ -27,7 +27,7 @@ extern "C" {
 
 #include <Arduino.h>
 #include <IPAddress.h>
-#include <Udp.h>
+#include "MDNSTransport.h"
 
 typedef uint8_t byte;
 
@@ -79,7 +79,8 @@ typedef void (*MDNSServiceFoundCallback)(const char*, MDNSServiceProtocol_t, con
 class MDNS
 {
 private:
-   UDP*                  _udp;
+   MDNSTransport         _transport;
+   MDNSTransport*        _udp;
    IPAddress             _ipAddress;
    MDNSDataInternal_t    _mdnsData;
    MDNSState_t           _state;
@@ -95,6 +96,8 @@ private:
    
    MDNSNameFoundCallback      _nameFoundCallback;
    MDNSServiceFoundCallback   _serviceFoundCallback;
+
+   void _initialize();
 
    MDNSError_t _processMDNSQuery();
    MDNSError_t _sendMDNSMessage(uint32_t peerAddress, uint32_t xid, int type, int serviceRecord);
@@ -121,7 +124,12 @@ private:
    
    void _finishedResolvingName(char* name, const byte ipAddr[4]);
 public:
-   MDNS(UDP& udp);
+   template <typename Transport>
+   MDNS(Transport& udp)
+      : _transport(udp), _udp(&_transport)
+   {
+      _initialize();
+   }
    ~MDNS();
    
    int begin(const IPAddress& ip);
