@@ -326,7 +326,10 @@ MDNSError_t MDNS::_sendMDNSMessage(uint32_t /*peerAddress*/, uint32_t xid, int t
 
 
 
-   this->_udp->beginPacket(mdnsMulticastIPAddr,MDNS_SERVER_PORT);
+   if (!this->_udp->beginPacket(mdnsMulticastIPAddr,MDNS_SERVER_PORT)) {
+      statusCode = MDNSSocketError;
+      goto errorReturn;
+   }
    this->_udp->write((uint8_t*)dnsHeader,sizeof(DNSHeader_t));
 
    ptr += sizeof(DNSHeader_t);
@@ -485,11 +488,12 @@ MDNSError_t MDNS::_sendMDNSMessage(uint32_t /*peerAddress*/, uint32_t xid, int t
    }
 
 
-   this->_udp->endPacket();
+   if (!this->_udp->endPacket())
+      statusCode = MDNSSocketError;
 
-#if defined(_USE_MALLOC_)
 errorReturn:
 
+#if defined(_USE_MALLOC_)
    if (NULL != dnsHeader)
       my_free(dnsHeader);
 #endif
