@@ -1156,12 +1156,12 @@ int MDNS::addServiceRecord(const char* name, uint16_t port,
             if (NULL != record) {
                record->name = record->textContent = record->servName = NULL;
                
-               record->name = (uint8_t*)my_malloc(strlen((char*)name));
+               record->name = (uint8_t*)my_malloc(strlen((char*)name) + 1);
                if (NULL == record->name)
                   goto errorReturn;
                
                if (NULL != textContent) {
-                  record->textContent = (uint8_t*)my_malloc(strlen((char*)textContent));
+                  record->textContent = (uint8_t*)my_malloc(strlen((char*)textContent) + 1);
                   if (NULL == record->textContent)
                      goto errorReturn;
                   
@@ -1174,6 +1174,8 @@ int MDNS::addServiceRecord(const char* name, uint16_t port,
                
                uint8_t* s = this->_findFirstDotFromRight(record->name);
                record->servName = (uint8_t*)my_malloc(strlen((char*)s) + 12);
+               if (NULL == record->servName)
+                  goto errorReturn;
                if (record->servName) {
                   strcpy((char*)record->servName, (const char*)s);
 
