@@ -147,6 +147,11 @@ void ignoreName(const char *, IPAddress)
 {
 }
 
+void countName(const char *, IPAddress)
+{
+    ++nameCallbacks;
+}
+
 void restartNameFromCallback(const char *, IPAddress)
 {
     ++nameCallbacks;
@@ -509,6 +514,61 @@ bool ptrInstanceCannotCrossRdataBoundary()
     return true;
 }
 
+bool truncatedPtrNameIsRejected()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+    mdns.setServiceFoundCallback(ignoreService);
+    REQUIRE(mdns.startDiscoveringService("_http", MDNSServiceTCP, 1000) == 1);
+
+    std::vector<uint8_t> packet;
+    writeHeader(packet, 0, 1);
+    const uint8_t record[] = {
+        0xc0, 0x0c,
+        0x00, 0x0c,
+        0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x02,
+        0x01, 'a'
+    };
+    packet.insert(packet.end(), record, record + sizeof(record));
+    int allocationsBeforePacket = mallocCalls;
+    transport.queue(packet.data(), packet.size());
+    mdns.run();
+
+    REQUIRE(mallocCalls == allocationsBeforePacket + 1);
+    REQUIRE(serviceCallbacks == 0);
+    return true;
+}
+
+bool outOfRangeCompressionPointerIsRejected()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+    mdns.setNameResolvedCallback(countName);
+    REQUIRE(mdns.resolveName("device", 1000) == 1);
+    nameCallbacks = 0;
+
+    std::vector<uint8_t> packet;
+    writeHeader(packet, 0, 1);
+    const uint8_t record[] = {
+        0xc0, 0xff,
+        0x00, 0x01,
+        0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x04,
+        192, 0, 2, 55
+    };
+    packet.insert(packet.end(), record, record + sizeof(record));
+    transport.queue(packet.data(), packet.size());
+    mdns.run();
+
+    REQUIRE(nameCallbacks == 0);
+    return true;
+}
+
 bool failedAnnouncementsAreRetried()
 {
     PacketTransport transport;
@@ -673,6 +733,8 @@ int main()
         {"truncated response name is rejected", truncatedResponseNameIsRejected},
         {"undersized PTR record is rejected", undersizedPtrRecordIsRejected},
         {"PTR instance stays within RDATA", ptrInstanceCannotCrossRdataBoundary},
+        {"truncated PTR name is rejected", truncatedPtrNameIsRejected},
+        {"out-of-range compression pointer is rejected", outOfRangeCompressionPointerIsRejected},
         {"failed announcements are retried", failedAnnouncementsAreRetried},
         {"short writes fail the send", shortWritesFailTheSend},
         {"undersized SRV record is rejected", undersizedSrvRecordIsRejected},

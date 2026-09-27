@@ -138,33 +138,62 @@ void my_free(void* ptr)
 #endif
 }
 
+static bool validEncodedDNSName(
+   const uint8_t* packet, uint16_t packetLength,
+   uint16_t offset, uint16_t encodedEnd)
+{
+   if (offset >= encodedEnd || encodedEnd > packetLength)
+      return false;
+
+   uint16_t cursor = offset;
+   uint16_t boundary = encodedEnd;
+   bool followingPointer = false;
+   while (packetHasBytes(cursor, 1, boundary)) {
+      uint8_t labelLength = packet[cursor];
+      if (0 == labelLength)
+         return followingPointer || cursor + 1 == encodedEnd;
+
+      if ((labelLength & 0xc0) == 0xc0) {
+         if (!packetHasBytes(cursor, 2, boundary) ||
+             (!followingPointer && cursor + 2 != encodedEnd))
+            return false;
+         uint16_t target =
+            (static_cast<uint16_t>(labelLength & 0x3f) << 8) |
+            packet[cursor + 1];
+         if (target >= cursor || !packetHasBytes(target, 1, packetLength))
+            return false;
+         cursor = target;
+         boundary = packetLength;
+         followingPointer = true;
+         continue;
+      }
+
+      if (labelLength > 63 ||
+          !packetHasBytes(cursor + 1, labelLength, boundary))
+         return false;
+      cursor += labelLength + 1;
+   }
+   return false;
+}
+
 static bool readServiceInstance(
    const uint8_t* packet, uint16_t packetLength, uint16_t offset, uint16_t recordEnd,
    uint8_t** instance, uint16_t* nameOffset)
 {
-   if (offset >= recordEnd || recordEnd > packetLength ||
-       !packetHasBytes(offset, 1, packetLength))
+   if (!validEncodedDNSName(packet, packetLength, offset, recordEnd))
       return false;
 
    uint16_t sourceOffset = offset;
-   uint16_t sourceEnd = recordEnd;
    uint8_t labelLength = packet[offset];
    if ((labelLength & 0xc0) == 0xc0) {
-      if (recordEnd - offset < 2 ||
-          !packetHasBytes(offset, 2, packetLength))
-         return false;
       sourceOffset =
          (static_cast<uint16_t>(labelLength & 0x3f) << 8) |
          packet[offset + 1];
-      if (!packetHasBytes(sourceOffset, 1, packetLength))
-         return false;
       labelLength = packet[sourceOffset];
-      sourceEnd = packetLength;
    }
 
    if (0 == labelLength || labelLength > 63 ||
-       sourceOffset >= sourceEnd ||
-       labelLength > sourceEnd - sourceOffset - 1)
+       !packetHasBytes(sourceOffset + 1, labelLength, packetLength))
       return false;
 
    uint8_t* value = (uint8_t*)my_malloc(labelLength + 1);
@@ -900,6 +929,11 @@ MDNSError_t MDNS::_processMDNSQuery()
                   offset += 1;
                   uint16_t compressedOffset =
                      (static_cast<uint16_t>(rLen & 0x3f) << 8) | buf[0];
+                  if (compressedOffset >= static_cast<uint16_t>(offset - 2) ||
+                      !packetHasBytes(compressedOffset, 1, udp_len)) {
+                     statusCode = MDNSInvalidArgument;
+                     goto errorReturn;
+                  }
 
                   for (j=0; j<2; j++) {
                      if (servNamePos[j] && servNamePos[j] != compressedOffset)
