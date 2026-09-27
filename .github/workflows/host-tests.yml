@@ -18,6 +18,33 @@ on:
   workflow_dispatch:
 
 jobs:
+  hardware-tools:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test network probe without hardware
+        run: |
+          python tests\hardware\MulticastMdnsTest\mdns_probe.py --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests\hardware\MulticastMdnsTest -p test_mdns_probe.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Parse hardware PowerShell scripts without running them
+        shell: pwsh
+        run: |
+          Get-ChildItem tests\hardware\MulticastMdnsTest -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+          }
+      - name: Test hardware runner with synthetic commands
+        shell: pwsh
+        run: .\tests\hardware\MulticastMdnsTest\Test-MdnsHardwareRunner.ps1
   sanitizers:
     runs-on: ubuntu-latest
     timeout-minutes: 15

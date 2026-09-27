@@ -22,6 +22,17 @@ Coverage-guided fuzzing runs with `bash tests/run-fuzz.sh` using Clang; set
 `MDNS_FUZZ_SECONDS=3600` for the one-hour-per-target release run.
 These host tools are not dependencies of embedded builds.
 
+## AZ3166 manual hardware validation
+
+The [manual hardware test guide](tests/hardware/MulticastMdnsTest/README.md)
+describes compile-only verification, explicit upload/run, network probing,
+and optional elevated TTL capture against this library checkout using the
+Core-provided `AZ3166MulticastUDP` transport.
+
+These files were copied from `AaronWangTT/devkit-sdk`; this migration does not
+remove the SDK copies. Core transport implementations and platform packaging
+remain owned by devkit-sdk. CI tests the host-side tools without flashing hardware.
+
 ## HomeTemperature fork
 
 Release 1.1.1 is maintained for
