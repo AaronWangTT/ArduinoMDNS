@@ -51,7 +51,7 @@ public:
     PacketTransport()
         : offset(0), sender(192, 0, 2, 20), senderPort(5353),
           sends(0), writes(0), open(false), allowSend(true),
-          shortWriteOnCall(0) {}
+          shortWriteOnCall(0), shortNextRead(false) {}
 
     uint8_t beginMulticast(IPAddress, uint16_t) {
         open = true;
@@ -91,6 +91,10 @@ public:
     int read(uint8_t *buffer, size_t size) {
         size_t available = packet.size() - offset;
         size = std::min(size, available);
+        if (shortNextRead && size > 0) {
+            shortNextRead = false;
+            --size;
+        }
         std::memcpy(buffer, packet.data() + offset, size);
         offset += size;
         return static_cast<int>(size);
@@ -124,6 +128,7 @@ public:
     bool open;
     bool allowSend;
     int shortWriteOnCall;
+    bool shortNextRead;
 };
 
 #define REQUIRE(condition) \
@@ -288,13 +293,13 @@ bool invalidDnsNamesAreRejected()
     return true;
 }
 
-bool serviceTxtUsesDnsCharacterStringEncoding()
+bool serviceTxtPreservesDnsCharacterStringEncoding()
 {
     PacketTransport transport;
     MDNS mdns(transport, false);
     REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
     REQUIRE(mdns.addServiceRecord(
-        "device._http", 80, MDNSServiceTCP, "path=/") == 1);
+        "device._http", 80, MDNSServiceTCP, "\x06" "path=/") == 1);
 
     const uint8_t expected[] = {
         0x00, 0x10, 0x80, 0x01,
@@ -304,12 +309,11 @@ bool serviceTxtUsesDnsCharacterStringEncoding()
     };
     REQUIRE(containsBytes(transport.output, expected, sizeof(expected)));
 
-    std::vector<char> oversized(257, 'x');
-    oversized[256] = '\0';
-    int sendsBeforeOversizedText = transport.sends;
+    const char malformedText[] = {5, 'x', '\0'};
+    int sendsBeforeMalformedText = transport.sends;
     REQUIRE(mdns.addServiceRecord(
-        "other._http", 80, MDNSServiceTCP, oversized.data()) == 0);
-    REQUIRE(transport.sends == sendsBeforeOversizedText);
+        "other._http", 80, MDNSServiceTCP, malformedText) == 0);
+    REQUIRE(transport.sends == sendsBeforeMalformedText);
     return true;
 }
 
@@ -601,6 +605,27 @@ bool shortWritesFailTheSend()
     return true;
 }
 
+bool shortReadsFlushTheDatagram()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+
+    const uint8_t query[] = {
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+        6, 'a', 'z', '3', '1', '6', '6',
+        5, 'l', 'o', 'c', 'a', 'l', 0,
+        0, 1, 0, 1
+    };
+    transport.queue(query, sizeof(query));
+    transport.shortNextRead = true;
+    mdns.run();
+
+    REQUIRE(transport.packet.empty());
+    REQUIRE(transport.offset == 0);
+    return true;
+}
+
 bool undersizedSrvRecordIsRejected()
 {
     PacketTransport transport;
@@ -831,7 +856,7 @@ int main()
         {"failed name replacement preserves object", failedNameReplacementPreservesObject},
         {"invalid service names are rejected", invalidServiceNamesAreRejected},
         {"invalid DNS names are rejected", invalidDnsNamesAreRejected},
-        {"service TXT uses DNS character-string encoding", serviceTxtUsesDnsCharacterStringEncoding},
+        {"service TXT preserves DNS character-string encoding", serviceTxtPreservesDnsCharacterStringEncoding},
         {"failed registration releases service slot", failedRegistrationReleasesServiceSlot},
         {"failed initial queries release state", failedInitialQueriesReleaseState},
         {"timeout callbacks preserve replacement queries", timeoutCallbacksPreserveReplacementQueries},
@@ -843,6 +868,7 @@ int main()
         {"out-of-range compression pointer is rejected", outOfRangeCompressionPointerIsRejected},
         {"failed announcements are retried", failedAnnouncementsAreRetried},
         {"short writes fail the send", shortWritesFailTheSend},
+        {"short reads flush the datagram", shortReadsFlushTheDatagram},
         {"undersized SRV record is rejected", undersizedSrvRecordIsRejected},
         {"invalid SRV target is rejected", invalidSrvTargetIsRejected},
         {"malformed TXT record is rejected", malformedTxtRecordIsRejected},

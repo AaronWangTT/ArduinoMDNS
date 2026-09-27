@@ -33,6 +33,13 @@ cmake --build build/host --parallel
 ctest --test-dir build/host --output-on-failure
 ```
 
+## TXT record encoding
+
+The `textContent` argument to `addServiceRecord()` uses the library's existing
+wire-format contract: pass one or more DNS character-strings, each prefixed by
+its one-byte length. For example, `"\x06" "path=/"` advertises `path=/`.
+Malformed character-string sequences are rejected.
+
 ## Requirements
 
 Any Arduino core and networking library that provides a UDP-compatible object
