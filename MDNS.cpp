@@ -206,6 +206,20 @@ static bool readServiceInstance(
    return true;
 }
 
+static bool validTXTRecord(
+   const uint8_t* packet, uint16_t offset, uint16_t dataLength)
+{
+   uint16_t cursor = offset;
+   uint16_t end = offset + dataLength;
+   while (cursor < end) {
+      uint8_t stringLength = packet[cursor++];
+      if (stringLength > end - cursor)
+         return false;
+      cursor += stringLength;
+   }
+   return true;
+}
+
 void MDNS::_initialize()
 {
    memset(&this->_mdnsData, 0, sizeof(MDNSDataInternal_t));
@@ -1099,6 +1113,11 @@ MDNSError_t MDNS::_processMDNSQuery()
                            memcpy((uint8_t*)buf, (uint16_t*)(ptr+offset) ,8);
                            ptrPorts[j] = ethutil_ntohs(*(uint16_t*)&buf[4]);
 
+                           if (!validEncodedDNSName(
+                                  udpBuffer, udp_len, offset + 6, offset + dataLen)) {
+                              statusCode = MDNSInvalidArgument;
+                              goto errorReturn;
+                           }
                            if ((buf[6] & 0xc0) == 0xc0) {
                               ptrTargetOffsets[j] =
                                  (static_cast<uint16_t>(buf[6] & 0x3f) << 8) |
@@ -1118,6 +1137,10 @@ MDNSError_t MDNS::_processMDNSQuery()
                               ((firstNamePtrOffset && firstNamePtrOffset == ptrOffsets[j]) ||
                               (0 == ptrLensCmp[j] && ptrNamesMatches[j]))) {
 
+                           if (!validTXTRecord(udpBuffer, offset, dataLen)) {
+                              statusCode = MDNSInvalidArgument;
+                              goto errorReturn;
+                           }
                            // if there's a content to this txt record, save it for delivery
                            if (dataLen > 1 && NULL == servTxt[j]) {
                               servTxt[j] = (uint8_t*)my_malloc(dataLen+1);

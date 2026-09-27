@@ -636,6 +636,112 @@ bool undersizedSrvRecordIsRejected()
     return true;
 }
 
+bool invalidSrvTargetIsRejected()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+    mdns.setServiceFoundCallback(ignoreService);
+    REQUIRE(mdns.startDiscoveringService("_http", MDNSServiceTCP, 1000) == 1);
+    serviceCallbacks = 0;
+
+    std::vector<uint8_t> packet;
+    writeHeader(packet, 1, 1, 2);
+    const uint8_t question[] = {
+        0x05, '_', 'h', 't', 't', 'p',
+        0x04, '_', 't', 'c', 'p',
+        0x05, 'l', 'o', 'c', 'a', 'l', 0x00,
+        0x00, 0x0c, 0x00, 0x01
+    };
+    packet.insert(packet.end(), question, question + sizeof(question));
+    const uint8_t ptrRecord[] = {
+        0xc0, 0x0c,
+        0x00, 0x0c, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x06,
+        0x03, 'f', 'o', 'o', 0xc0, 0x0c
+    };
+    packet.insert(packet.end(), ptrRecord, ptrRecord + sizeof(ptrRecord));
+    const uint8_t srvRecord[] = {
+        0xc0, 0x2e,
+        0x00, 0x21, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xc0, 0xff
+    };
+    packet.insert(packet.end(), srvRecord, srvRecord + sizeof(srvRecord));
+    const uint8_t addressRecord[] = {
+        0xc0, 0x0c,
+        0x00, 0x01, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x04,
+        192, 0, 2, 55
+    };
+    packet.insert(packet.end(), addressRecord, addressRecord + sizeof(addressRecord));
+    transport.queue(packet.data(), packet.size());
+    mdns.run();
+
+    REQUIRE(serviceCallbacks == 0);
+    return true;
+}
+
+bool malformedTxtRecordIsRejected()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+    mdns.setServiceFoundCallback(ignoreService);
+    REQUIRE(mdns.startDiscoveringService("_http", MDNSServiceTCP, 1000) == 1);
+    serviceCallbacks = 0;
+
+    std::vector<uint8_t> packet;
+    writeHeader(packet, 1, 1, 3);
+    const uint8_t question[] = {
+        0x05, '_', 'h', 't', 't', 'p',
+        0x04, '_', 't', 'c', 'p',
+        0x05, 'l', 'o', 'c', 'a', 'l', 0x00,
+        0x00, 0x0c, 0x00, 0x01
+    };
+    packet.insert(packet.end(), question, question + sizeof(question));
+    const uint8_t ptrRecord[] = {
+        0xc0, 0x0c,
+        0x00, 0x0c, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x06,
+        0x03, 'f', 'o', 'o', 0xc0, 0x0c
+    };
+    packet.insert(packet.end(), ptrRecord, ptrRecord + sizeof(ptrRecord));
+    const uint8_t srvRecord[] = {
+        0xc0, 0x2e,
+        0x00, 0x21, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xc0, 0x0c
+    };
+    packet.insert(packet.end(), srvRecord, srvRecord + sizeof(srvRecord));
+    const uint8_t txtRecord[] = {
+        0xc0, 0x2e,
+        0x00, 0x10, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x02,
+        0x05, 'x'
+    };
+    packet.insert(packet.end(), txtRecord, txtRecord + sizeof(txtRecord));
+    const uint8_t addressRecord[] = {
+        0xc0, 0x0c,
+        0x00, 0x01, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x04,
+        192, 0, 2, 55
+    };
+    packet.insert(packet.end(), addressRecord, addressRecord + sizeof(addressRecord));
+    transport.queue(packet.data(), packet.size());
+    mdns.run();
+
+    REQUIRE(serviceCallbacks == 0);
+    return true;
+}
+
 bool preservesFullCompressionOffsets()
 {
     PacketTransport transport;
@@ -738,6 +844,8 @@ int main()
         {"failed announcements are retried", failedAnnouncementsAreRetried},
         {"short writes fail the send", shortWritesFailTheSend},
         {"undersized SRV record is rejected", undersizedSrvRecordIsRejected},
+        {"invalid SRV target is rejected", invalidSrvTargetIsRejected},
+        {"malformed TXT record is rejected", malformedTxtRecordIsRejected},
         {"preserves full compression offsets", preservesFullCompressionOffsets},
     };
 
