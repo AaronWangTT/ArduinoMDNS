@@ -111,8 +111,10 @@ packet budget and fail explicitly. The AVR limit favors small AVR SRAM over
 accepting every Ethernet-sized datagram; eight configured registration slots
 remain available but their actual names/TXT consume additional heap.
 
-After whole-packet validation, an allocation-free scan measures the largest
-expanded name, `N`, and largest supported TXT RDATA, `T`. Discovery allocates
+One allocation-free pass validates the entire packet while measuring the
+largest expanded name, `N`, and largest supported TXT RDATA, `T`. It uses the
+shared cursor/name decoder, exact PTR/SRV name consumption, exact A width and
+the same bounded TXT-segment validator used for registration. Discovery allocates
 one block of `sizeof(Assembly) + C * sizeof(Candidate) + N + max(N, T + 1)`
 bytes. `C` is a conservative upper bound from positive PTR count, capped at
 six; duplicate PTRs still count only once during result assembly. Scratch
@@ -139,14 +141,15 @@ above offsets 255 and 512, and the suite also runs with an explicit 1024-byte
 cap to cover a common override.
 
 AVR GCC 7.3 (`-Os`, ATmega328P, without LTO) reports 76 bytes for `_process`,
-8 for `_receive` and 27 for `run`. Summing the validation call chain through
-`validatePacket` (56), `readRecord` (33), `skipName` (18) and `decodeName` (34)
-gives 252 bytes. Service assembly's deeper path is about 333 bytes. Traversal
+10 for `_receive` and 26 for `run`. Summing the validation/sizing call chain
+through `measureScratch` (69), `readRecord` (33), `skipName` (18) and
+`decodeName` (34) gives 266 bytes. Service assembly's deeper path is about
+325 bytes. Traversal
 helpers are deliberately not inlined on GCC/Clang, so those frames are gone
-before callbacks: only 111 bytes of `run`/receive/process frames remain.
+before callbacks: only 112 bytes of `run`/receive/process frames remain.
 For the ordinary 186-byte service fixture, AVR temporary heap is
 `186 + 76 = 262` bytes; with those live entry frames, library temporaries are
-about 373 bytes during callback dispatch, below 500. These figures exclude
+about 374 bytes during callback dispatch, below 500. These figures exclude
 resident names/queries, sketch and callback frames, allocator overhead,
 interrupt handlers and backend frames. They are compiler/layout budgets, not
 a hardware stack high-water measurement. On AVR, allocations temporarily
@@ -156,6 +159,14 @@ the previous margin. This avoids relying
 on the allocator's 32-byte default when deeper library calls are imminent.
 Existing larger margins are preserved. Other libraries, interrupts and
 callbacks still need their own stack budgeting.
+
+With Arduino AVR core 1.8.8, Ethernet 2.0.2 and the standard Leonardo board
+configuration, the Ethernet registration examples use 28,458 bytes of flash
+without TXT and 28,586 with TXT, both below the 28,672-byte limit. Checked
+serialization preflights exact wire lengths arithmetically, bounds writes by
+the actual allocation and verifies the final length. Shared error handling and
+combined validation/sizing reduce flash without disabling parser features or
+changing board compiler flags.
 
 Discovery remains available on AVR, including Uno/Nano; there is no blanket
 physical-SRAM feature restriction. Actual packet-sized scratch and a bounded

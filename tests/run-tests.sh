@@ -22,8 +22,8 @@ sources=("$sourceRoot/MDNS.cpp")
 if [[ -f "$sourceRoot/utility/DnsPacket.cpp" ]]; then
    sources+=("$sourceRoot/utility/DnsPacket.cpp")
 fi
-"${CC:-gcc}" -g -O1 -fsanitize=address,undefined -I. \
-   -c utility/EthernetUtil.c -o "$build/EthernetUtil.o"
+"${CC:-gcc}" -g -O1 -fsanitize=address,undefined "-I$sourceRoot" \
+   -c "$sourceRoot/utility/EthernetUtil.c" -o "$build/EthernetUtil.o"
 
 tests=(test_baseline test_dns_packet test_mdns test_allocations)
 if [[ "${MDNS_BASELINE_ONLY:-0}" == 1 ]]; then
@@ -33,11 +33,8 @@ elif [[ "${MDNS_PARSER_ONLY:-0}" == 1 ]]; then
 fi
 for test in "${tests[@]}"; do
    if [[ ! -f "tests/$test.cpp" ]]; then
-      if [[ "${MDNS_BASELINE_ONLY:-0}" != 1 ]]; then
-         echo "Required test source missing: tests/$test.cpp" >&2
-         exit 1
-      fi
-      continue
+      echo "Required test source missing: tests/$test.cpp" >&2
+      exit 1
    fi
    if [[ "$test" == test_dns_packet ]]; then
       "$CXX" "${flags[@]}" tests/test_dns_packet.cpp utility/DnsPacket.cpp -o "$build/$test"

@@ -91,35 +91,22 @@ bool label(const char* text, size_t size, bool service)
 
 uint8_t* makeName(const char* text, MDNSServiceProtocol_t proto, int kind)
 {
-   if (!text) return NULL;
-   size_t n = strlen(text), first = n, second = 0;
-   const char* tail = NULL;
+   // All callers validate first; the longest locally generated name is 140 bytes.
+   size_t n = strlen(text);
    const uint8_t* suffix = kind ? (proto == MDNSServiceTCP ? tcpSuffix : udpSuffix)
                                 : localSuffix;
-   if (kind && !validProtocol(proto)) return NULL;
-   if (kind == 2) {
-      tail = strrchr(text, '.');
-      if (!tail) return NULL;
-      first = size_t(tail - text);
-      second = n - first - 1;
-      if (!label(text, first, false) || !label(tail + 1, second, true)) return NULL;
-   } else {
-      if (!label(text, first, kind == 1)) return NULL;
-      if (!kind && strchr(text, '.')) return NULL;
-   }
-   size_t total = 1 + first + (tail ? 1 + second : 0) + wireSize(suffix);
-   if (total > 255) return NULL;
+   size_t suffixLength = kind ? sizeof(tcpSuffix) : sizeof(localSuffix);
+   size_t total = n + 1 + suffixLength;
    uint8_t* result = static_cast<uint8_t*>(allocateBytes(total));
    if (!result) return NULL;
-   result[0] = uint8_t(first);
-   memcpy(result + 1, text, first);
-   size_t pos = first + 1;
-   if (tail) {
-      result[pos++] = uint8_t(second);
-      memcpy(result + pos, tail + 1, second);
-      pos += second;
+   result[0] = uint8_t(n);
+   memcpy(result + 1, text, n);
+   if (kind == 2) {
+      size_t first = size_t(strrchr(text, '.') - text);
+      result[0] = uint8_t(first);
+      result[first + 1] = uint8_t(n - first - 1);
    }
-   memcpy(result + pos, suffix, wireSize(suffix));
+   memcpy(result + n + 1, suffix, suffixLength);
    return result;
 }
 
@@ -149,50 +136,77 @@ bool validTxt(const uint8_t* data, size_t size)
 class Writer {
 public:
    uint8_t* data;
-   size_t size;
+   size_t size, capacity;
    bool ok;
-   Writer(uint8_t* buffer) : data(buffer), size(0), ok(true) {}
+   Writer(uint8_t* buffer, size_t limit) : data(buffer), size(0), capacity(limit), ok(true) {}
    void bytes(const uint8_t* bytes, size_t count) {
-      if (!ok || count > MDNS_MAX_PACKET_SIZE - size) { ok = false; return; }
-      if (data && count) memcpy(data + size, bytes, count);
+      if (!ok || count > capacity - size) { ok = false; return; }
+      if (count) memcpy(data + size, bytes, count);
       size += count;
    }
    void u8(uint8_t n) { bytes(&n, 1); }
-   void u16(uint16_t n) { u8(uint8_t(n >> 8)); u8(uint8_t(n)); }
-   void u32(uint32_t n) { u16(uint16_t(n >> 16)); u16(uint16_t(n)); }
+   void u16(uint16_t n) {
+      const uint8_t value[] = {uint8_t(n >> 8), uint8_t(n)};
+      bytes(value, sizeof(value));
+   }
+   void u32(uint32_t n) {
+      const uint8_t value[] = {uint8_t(n >> 24), uint8_t(n >> 16), uint8_t(n >> 8), uint8_t(n)};
+      bytes(value, sizeof(value));
+   }
    void name(const uint8_t* n) { bytes(n, wireSize(n)); }
    void header(uint16_t xid, uint16_t flags, uint16_t questions, uint16_t answers) {
-      u16(xid); u16(flags); u16(questions); u16(answers); u16(0); u16(0);
+      const uint8_t value[] = {
+         uint8_t(xid >> 8), uint8_t(xid), uint8_t(flags >> 8), uint8_t(flags),
+         uint8_t(questions >> 8), uint8_t(questions), uint8_t(answers >> 8), uint8_t(answers),
+         0, 0, 0, 0
+      };
+      bytes(value, sizeof(value));
    }
    void rr(const uint8_t* owner, uint16_t type, uint16_t klass,
            uint32_t ttl, size_t length) {
-      name(owner); u16(type); u16(klass); u32(ttl);
+      name(owner);
       if (length > 65535) ok = false;
-      u16(uint16_t(length));
+      const uint8_t value[] = {
+         uint8_t(type >> 8), uint8_t(type), uint8_t(klass >> 8), uint8_t(klass),
+         uint8_t(ttl >> 24), uint8_t(ttl >> 16), uint8_t(ttl >> 8), uint8_t(ttl),
+         uint8_t(length >> 8), uint8_t(length)
+      };
+      bytes(value, sizeof(value));
    }
 };
+
+size_t recordLength(const uint8_t* host, const MDNSServiceRecord_t* service, uint32_t ttl)
+{
+   if (!service) return 26 + wireSize(host);
+   const uint8_t* instance = service->servName;
+   size_t typeLength = wireSize(instance + size_t(instance[0]) + 1);
+   size_t instanceLength = size_t(instance[0]) + 1 + typeLength;
+   if (!ttl) return 22 + typeLength + instanceLength;
+   return 72 + 2 * typeLength + 3 * instanceLength + 2 * wireSize(host) +
+          sizeof(enumerationName) + service->textLength;
+}
 
 void serializeRecord(Writer& w, const uint8_t* host, const IPAddress& ip,
                      const MDNSServiceRecord_t* service, uint32_t ttl, uint16_t xid)
 {
-   if (!service) {
-      w.header(xid, 0x8400, 0, 1);
-      w.rr(host, 1, 0x8001, ttl, 4);
-      for (size_t i = 0; i < 4; ++i) w.u8(ip[i]);
-      return;
+   const uint8_t* type = NULL;
+   w.header(xid, 0x8400, 0, service && ttl ? 5 : 1);
+   if (service) {
+      const uint8_t* instance = service->servName;
+      type = instance + size_t(instance[0]) + 1;
+      w.rr(type, 12, 1, ttl, wireSize(instance)); w.name(instance);
+      if (!ttl) return;
+      w.rr(instance, 33, 0x8001, ttl, 6 + wireSize(host));
+      w.u16(0); w.u16(0); w.u16(service->port); w.name(host);
+      w.rr(instance, 16, 0x8001, ttl, service->textLength);
+      w.bytes(service->textContent, service->textLength);
    }
-   const uint8_t* instance = service->servName;
-   const uint8_t* type = instance + size_t(instance[0]) + 1;
-   w.header(xid, 0x8400, 0, ttl ? 5 : 1);
-   w.rr(type, 12, 1, ttl, wireSize(instance)); w.name(instance);
-   if (!ttl) return;
-   w.rr(instance, 33, 0x8001, ttl, 6 + wireSize(host));
-   w.u16(0); w.u16(0); w.u16(service->port); w.name(host);
-   w.rr(instance, 16, 0x8001, ttl, service->textLength);
-   w.bytes(service->textContent, service->textLength);
    w.rr(host, 1, 0x8001, ttl, 4);
-   for (size_t i = 0; i < 4; ++i) w.u8(ip[i]);
-   w.rr(enumerationName, 12, 1, ttl, wireSize(type)); w.name(type);
+   const uint8_t address[] = {ip[0], ip[1], ip[2], ip[3]};
+   w.bytes(address, sizeof(address));
+   if (service) {
+      w.rr(enumerationName, 12, 1, ttl, wireSize(type)); w.name(type);
+   }
 }
 }
 
@@ -214,6 +228,9 @@ MDNS::~MDNS()
 }
 
 void MDNS::_resetError() { if (!_running) _error = MDNSSuccess; }
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
 void MDNS::_fail(MDNSError_t error) { if (_error == MDNSSuccess) _error = error; }
 
 int MDNS::begin(const IPAddress& ip) { return begin(ip, "arduino"); }
@@ -242,9 +259,9 @@ int MDNS::setName(const char* name)
    if (!next) { _fail(MDNSOutOfMemory); return 0; }
    // An existing registration must remain serializable after a host rename.
    for (int i = 0; i < NumMDNSServiceRecords; ++i) if (_serviceRecords[i]) {
-      Writer check(NULL);
-      serializeRecord(check, next, _ipAddress, _serviceRecords[i], kTTL, 0);
-      if (!check.ok) { free(next); _fail(MDNSResourceLimit); return 0; }
+      if (recordLength(next, _serviceRecords[i], kTTL) > MDNS_MAX_PACKET_SIZE) {
+         free(next); _fail(MDNSResourceLimit); return 0;
+      }
    }
    free(_name); _name = next;
    return 1;
@@ -277,13 +294,15 @@ bool MDNS::_sendRecord(int idx, uint32_t ttl, uint16_t xid)
 {
    if (!_name) { _fail(MDNSInvalidArgument); return false; }
    MDNSServiceRecord_t* service = idx < 0 ? NULL : _serviceRecords[idx];
-   Writer check(NULL);
-   serializeRecord(check, _name, _ipAddress, service, ttl, xid);
-   if (!check.ok) { _fail(MDNSResourceLimit); return false; }
-   uint8_t* buffer = static_cast<uint8_t*>(allocateBytes(check.size));
+   size_t length = recordLength(_name, service, ttl);
+   if (length > MDNS_MAX_PACKET_SIZE) { _fail(MDNSResourceLimit); return false; }
+   uint8_t* buffer = static_cast<uint8_t*>(allocateBytes(length));
    if (!buffer) { _fail(MDNSOutOfMemory); return false; }
-   Writer out(buffer);
+   Writer out(buffer, length);
    serializeRecord(out, _name, _ipAddress, service, ttl, xid);
+   if (!out.ok || out.size != length) {
+      free(buffer); _fail(MDNSServerError); return false;
+   }
    bool sent = out.ok && _send(buffer, out.size);
    free(buffer);
    return sent;
@@ -398,8 +417,10 @@ bool MDNS::_sendQuery(uint8_t idx)
    if (length > MDNS_MAX_PACKET_SIZE) { _fail(MDNSResourceLimit); return false; }
    uint8_t* packet = static_cast<uint8_t*>(allocateBytes(length));
    if (!packet) { _fail(MDNSOutOfMemory); return false; }
-   Writer w(packet);
-   w.header(0, 0, 1, 0); w.name(q.name); w.u16(idx ? 12 : 1); w.u16(1);
+   Writer w(packet, length);
+   w.header(0, 0, 1, 0); w.name(q.name);
+   const uint8_t trailer[] = {0, uint8_t(idx ? 12 : 1), 0, 1};
+   w.bytes(trailer, sizeof(trailer));
    bool sent = w.ok && _send(packet, w.size);
    free(packet);
    if (sent) q.sent = uint32_t(millis());
@@ -443,24 +464,27 @@ int MDNS::startDiscoveringService(const char* name, MDNSServiceProtocol_t proto,
 
 void MDNS::_finishName(const uint8_t* address)
 {
-   Query old = _queries[0];
+   uint8_t* oldName = _queries[0].name;
+   char* oldDisplay = _queries[0].display;
    _queries[0].name = NULL; _queries[0].display = NULL;
    ++_queries[0].generation;
    MDNSNameFoundCallback callback = _nameFoundCallback;
-   if (callback) callback(old.display, address ? IPAddress(address) : IPAddress(uint32_t(0xffffffffUL)));
-   free(old.name); free(old.display);
+   if (callback) callback(oldDisplay, address ? IPAddress(address) : IPAddress(uint32_t(0xffffffffUL)));
+   free(oldName); free(oldDisplay);
 }
 
 void MDNS::_timeoutService()
 {
-   Query old = _queries[1];
+   uint8_t* oldName = _queries[1].name;
+   char* oldDisplay = _queries[1].display;
+   MDNSServiceProtocol_t oldProto = _queries[1].proto;
    _queries[1].name = NULL; _queries[1].display = NULL;
    ++_queries[1].generation;
    MDNSServiceFoundCallback legacy = _serviceFoundCallback;
    MDNSServiceFoundBinaryCallback binary = _binaryCallback;
-   if (binary) binary(old.display, old.proto, NULL, IPAddress(), 0, NULL, 0);
-   else if (legacy) legacy(old.display, old.proto, NULL, IPAddress(), 0, NULL);
-   free(old.name); free(old.display);
+   if (binary) binary(oldDisplay, oldProto, NULL, IPAddress(), 0, NULL, 0);
+   else if (legacy) legacy(oldDisplay, oldProto, NULL, IPAddress(), 0, NULL);
+   free(oldName); free(oldDisplay);
 }
 
 void MDNS::_receive()
@@ -468,6 +492,7 @@ void MDNS::_receive()
    int advertised = _udp->parsePacket();
    if (!advertised) return;
    if (advertised < 0) { _fail(MDNSSocketError); _recover(); return; }
+   const uint16_t peerPort = _udp->remotePort();
    if (advertised < 12 || size_t(advertised) > MDNS_MAX_PACKET_SIZE) {
       _fail(advertised < 12 ? MDNSMalformedPacket : MDNSResourceLimit);
       _recover(); return;
@@ -478,7 +503,7 @@ void MDNS::_receive()
    if (received != advertised) {
       free(packet); _fail(MDNSSocketError); _recover(); return;
    }
-   _process(packet, size_t(advertised));
+   if (peerPort == kPort) _process(packet, size_t(advertised));
    free(packet);
 }
 
@@ -486,22 +511,26 @@ namespace {
 class Records {
 public:
    mdns::PacketCursor cursor;
-   uint16_t remaining[3];
-   unsigned section;
+   const mdns::DnsHeader* header;
+   uint16_t remaining;
+   uint8_t section;
    Records(mdns::PacketView packet, const mdns::DnsHeader& header)
-      : cursor(packet, 12, packet.length), section(0)
+      : cursor(packet, 12, packet.length), header(&header), remaining(header.answers), section(0)
    {
-      remaining[0] = header.answers; remaining[1] = header.authorities;
-      remaining[2] = header.additionals;
       for (uint16_t i = 0; i < header.questions; ++i) {
          mdns::Question q;
-         if (mdns::readQuestion(cursor, q) != mdns::ParseOk) { section = 3; break; }
+         if (mdns::readQuestion(cursor, q) != mdns::ParseOk) {
+            section = 3; remaining = 0; break;
+         }
       }
    }
    bool next(mdns::ResourceRecord& rr) {
-      while (section < 3 && !remaining[section]) ++section;
-      if (section == 3) return false;
-      --remaining[section];
+      while (!remaining) {
+         if (section == 0) { section = 1; remaining = header->authorities; }
+         else if (section == 1) { section = 2; remaining = header->additionals; }
+         else return false;
+      }
+      --remaining;
       return mdns::readRecord(cursor, rr) == mdns::ParseOk;
    }
    bool positive(const mdns::ResourceRecord& rr) const {
@@ -520,42 +549,60 @@ struct Assembly {
    size_t candidateCapacity;
 };
 
-bool measureName(mdns::PacketView packet, size_t start, size_t end, size_t& maximum)
+mdns::ParseStatus measureName(mdns::PacketView packet, size_t start, size_t end,
+                              size_t& maximum, bool exact = false)
 {
    size_t consumed = 0, expanded = 0;
-   if (mdns::decodeName(packet, start, end, NULL, 0, consumed, expanded) != mdns::ParseOk)
-      return false;
+   mdns::ParseStatus status = mdns::decodeName(packet, start, end, NULL, 0, consumed, expanded);
+   if (status != mdns::ParseOk) return status;
+   if (exact && consumed != end - start) return mdns::ParseInvalidRdata;
    if (expanded > maximum) maximum = expanded;
-   return true;
+   return mdns::ParseOk;
 }
 // Keep traversal frames out of the callback phase on small-stack targets.
 #if defined(__GNUC__)
 __attribute__((noinline))
 #endif
-bool measureScratch(mdns::PacketView packet, const mdns::DnsHeader& header,
+mdns::ParseStatus measureScratch(mdns::PacketView packet, mdns::DnsHeader& header,
                      size_t& names, size_t& txt, size_t& candidates)
 {
-   mdns::PacketCursor cursor(packet, 12, packet.length);
-   for (uint16_t i = 0; i < header.questions; ++i) {
+   mdns::PacketCursor cursor(packet);
+   mdns::DnsHeader parsed;
+   mdns::ParseStatus status = mdns::readHeader(cursor, parsed);
+   if (status != mdns::ParseOk) return status;
+   for (uint16_t i = 0; i < parsed.questions; ++i) {
       mdns::Question q;
-      if (mdns::readQuestion(cursor, q) != mdns::ParseOk ||
-          !measureName(packet, q.nameOffset, packet.length, names)) return false;
+      status = mdns::readQuestion(cursor, q);
+      if (status != mdns::ParseOk) return status;
+      status = measureName(packet, q.nameOffset, packet.length, names);
+      if (status != mdns::ParseOk) return status;
    }
-   const uint16_t counts[] = {header.answers, header.authorities, header.additionals};
+   const uint16_t counts[] = {parsed.answers, parsed.authorities, parsed.additionals};
    for (size_t section = 0; section < 3; ++section)
       for (uint16_t i = 0; i < counts[section]; ++i) {
          mdns::ResourceRecord rr;
-         if (mdns::readRecord(cursor, rr) != mdns::ParseOk ||
-             !measureName(packet, rr.nameOffset, packet.length, names)) return false;
-         if ((rr.type == 12 || rr.type == 33) &&
-             !measureName(packet, rr.rdataOffset + (rr.type == 33 ? 6 : 0),
-                          rr.rdataOffset + rr.rdataLength, names)) return false;
+         status = mdns::readRecord(cursor, rr);
+         if (status != mdns::ParseOk) return status;
+         status = measureName(packet, rr.nameOffset, packet.length, names);
+         if (status != mdns::ParseOk) return status;
+         if (rr.type == 12 || rr.type == 33) {
+            size_t fixed = rr.type == 33 ? 6 : 0;
+            if (rr.rdataLength <= fixed) return mdns::ParseInvalidRdata;
+            status = measureName(packet, rr.rdataOffset + fixed,
+                                 rr.rdataOffset + rr.rdataLength, names, true);
+            if (status != mdns::ParseOk) return status;
+         }
+         if ((rr.type == 1 && rr.rdataLength != 4) ||
+             (rr.type == 16 && !validTxt(packet.data + rr.rdataOffset, rr.rdataLength)))
+            return mdns::ParseInvalidRdata;
          if (rr.type == 16 && rr.rdataLength <= MDNS_MAX_TXT_SIZE && rr.rdataLength > txt)
             txt = rr.rdataLength;
          if (section != 1 && rr.type == 12 && rr.ttl && (rr.klass & 0x7fff) == 1 &&
              candidates < kCandidates) ++candidates;
       }
-   return true;
+   if (cursor.remaining()) return mdns::ParseTrailingData;
+   header = parsed;
+   return mdns::ParseOk;
 }
 size_t decode(mdns::PacketView packet, size_t start, size_t end, uint8_t* output, size_t capacity)
 {
@@ -613,8 +660,8 @@ MDNSError_t assembleServices(mdns::PacketView packet, const mdns::DnsHeader& hea
          return MDNSUnrepresentableName;
       size_t c = 0;
       for (; c < count; ++c)
-         if (equalOffsets(packet, rr.rdataOffset, rr.rdataOffset + rr.rdataLength,
-                          work.candidates[c].instance, work.candidates[c].instanceEnd, work)) break;
+         if (equalAt(packet, work.candidates[c].instance, work.candidates[c].instanceEnd,
+                      work.left, work.right, work.nameCapacity)) break;
       if (c < count) continue;
       if (count == work.candidateCapacity) return MDNSResourceLimit;
       work.candidates[count].instance = rr.rdataOffset;
@@ -694,7 +741,8 @@ void MDNS::_process(const uint8_t* data, size_t length)
 {
    mdns::PacketView packet(data, length);
    mdns::DnsHeader header;
-   mdns::ParseStatus status = mdns::validatePacket(packet, header);
+   size_t nameCapacity = 1, txtCapacity = 0, candidateCapacity = 0;
+   mdns::ParseStatus status = measureScratch(packet, header, nameCapacity, txtCapacity, candidateCapacity);
    if (status != mdns::ParseOk) {
       _fail(status == mdns::ParseResourceLimit ? MDNSResourceLimit : MDNSMalformedPacket);
       return;
@@ -703,10 +751,6 @@ void MDNS::_process(const uint8_t* data, size_t length)
    if (header.flags & 0x7a0f) return;
    const bool response = (header.flags & 0x8000) != 0;
    if (response && !_queries[0].name && !_queries[1].name) return;
-   size_t nameCapacity = 1, txtCapacity = 0, candidateCapacity = 0;
-   if (!measureScratch(packet, header, nameCapacity, txtCapacity, candidateCapacity)) {
-      _fail(MDNSMalformedPacket); return;
-   }
    if (!response) {
       _respond(data, length, nameCapacity); return;
    }

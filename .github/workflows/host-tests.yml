@@ -23,6 +23,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify historical query baseline
+        env:
+          MDNS_BASELINE_ONLY: "1"
+        run: bash tests/run-tests.sh
       - name: Deterministic regression and property tests
         run: bash tests/run-tests.sh
       - name: Regression and allocation tests with AVR resource limits

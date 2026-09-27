@@ -227,6 +227,19 @@ static void ownershipAndTxt()
       assert(ok); assert(sentTxt(s.udp.sent.back()) == Bytes(1, 0));
       s.mdns.removeAllServiceRecords();
    }
+   assert(s.mdns.addServiceRecord("Null._http", 82, MDNSServiceTCP, NULL));
+   assert(sentTxt(s.udp.sent.back()) == Bytes(1, 0));
+   s.mdns.removeAllServiceRecords();
+   assert(s.mdns.addServiceRecord("Null._http", 82, MDNSServiceTCP, nullptr));
+   assert(sentTxt(s.udp.sent.back()) == Bytes(1, 0));
+   s.mdns.removeAllServiceRecords();
+   assert(s.mdns.addServiceRecord("Null._http", 82, MDNSServiceTCP, NULL, 0));
+   assert(sentTxt(s.udp.sent.back()) == Bytes(1, 0));
+   s.mdns.removeAllServiceRecords();
+   assert(!s.mdns.setName(""));
+   assert(!s.mdns.resolveName("", 0));
+   assert(!s.mdns.startDiscoveringService("", MDNSServiceTCP, 0));
+   assert(!s.mdns.addServiceRecord("Instance.", 80, MDNSServiceTCP));
    assert(!s.mdns.addServiceRecord("Invalid._http", 80, MDNSServiceTCP, "\x05" "bad"));
    assert(!s.mdns.addServiceRecord("Invalid._http", 80, MDNSServiceTCP, static_cast<const uint8_t*>(NULL), 1));
    assert(!s.mdns.addServiceRecord("Invalid", 80, MDNSServiceTCP));
@@ -246,6 +259,33 @@ static void ownershipAndTxt()
    limit.push_back(0);
    assert(!s.mdns.addServiceRecord("TooLarge._http", 81, MDNSServiceTCP, limit.data(), limit.size()));
    assert(s.mdns.lastError() == MDNSResourceLimit);
+}
+static void sourcePortFiltering()
+{
+   for (int kind = 0; kind < 3; ++kind) {
+      Session s;
+      Packet packet;
+      if (kind == 0) {
+         s.discover();
+         packet = fullPacket();
+      } else if (kind == 1) {
+         assert(s.mdns.resolveName("device", 0));
+         packet.a();
+      } else {
+         packet = Packet(0);
+         packet.question(dotted("localHost.local"), 1);
+      }
+      s.udp.sent.clear();
+      s.udp.enqueue(packet.bytes);
+      s.udp.incoming.back().port = 9999;
+      s.mdns.run();
+      assert(events.empty() && hostEvents.empty() && s.udp.sent.empty());
+      assert(s.udp.available() == 0 && s.mdns.lastError() == MDNSSuccess);
+      s.feed(packet);
+      if (kind == 0) assert(events.size() == 1);
+      if (kind == 1) assert(hostEvents.size() == 1);
+      if (kind == 2) assert(s.udp.sent.size() == 1);
+   }
 }
 static void permutationsAndAssociation()
 {
@@ -491,7 +531,7 @@ static void allocationFailures()
 #endif
 int main()
 {
-   ownershipAndTxt(); permutationsAndAssociation(); malformedAndReceive();
+   ownershipAndTxt(); sourcePortFiltering(); permutationsAndAssociation(); malformedAndReceive();
    callbacksAndClocks(); transmitFailures();
 #ifdef MDNS_TEST_ALLOCATIONS
    allocationFailures();

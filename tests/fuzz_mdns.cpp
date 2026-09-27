@@ -77,6 +77,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
    mdns.startDiscoveringService("_http", MDNSServiceTCP, 0);
    mdns.addServiceRecord("Fuzz._http", 80, MDNSServiceTCP);
    udp.enqueue(std::vector<uint8_t>(data, data + size));
+   if (size && (data[0] & 1)) udp.incoming.back().port = uint16_t(data[0]);
    mdns.run();
    // Exercise lifecycle and binary TXT even when arbitrary input cannot pass
    // the complete DNS envelope gate; retain a raw-packet pass above.
@@ -93,6 +94,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
       switch (control & 7) {
          case 0:
             udp.enqueue(std::vector<uint8_t>(data, data + size));
+            if (amount & 1) udp.incoming.back().port = amount;
             mdns.run();
             break;
          case 1:
