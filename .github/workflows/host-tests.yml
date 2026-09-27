@@ -1,0 +1,42 @@
+name: Host Tests
+
+on:
+  push:
+    paths:
+      - ".github/workflows/host-tests.yml"
+      - "tests/host/**"
+      - "utility/**"
+      - "ArduinoMDNS.h"
+      - "MDNS.cpp"
+      - "MDNS.h"
+      - "MDNSTransport.h"
+  pull_request:
+    paths:
+      - ".github/workflows/host-tests.yml"
+      - "tests/host/**"
+      - "utility/**"
+      - "ArduinoMDNS.h"
+      - "MDNS.cpp"
+      - "MDNS.h"
+      - "MDNSTransport.h"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Configure host tests
+        run: cmake -S tests/host -B build/host -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build host tests
+        run: cmake --build build/host --parallel
+
+      - name: Run host tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build/host --output-on-failure

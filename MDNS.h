@@ -79,6 +79,9 @@ typedef void (*MDNSServiceFoundCallback)(const char*, MDNSServiceProtocol_t, con
 class MDNS
 {
 private:
+   MDNS(const MDNS&) = delete;
+   MDNS& operator=(const MDNS&) = delete;
+
    MDNSTransport         _transport;
    MDNSTransport*        _udp;
    bool                  _waitForNetworkHardware;
