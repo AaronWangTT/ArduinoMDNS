@@ -8,9 +8,42 @@ mDNS library for Arduino. Based on [@TrippyLighting](https://github.com/TrippyLi
 
 Supports mDNS (registering services) and DNS-SD (service discovery).
 
+## HomeTemperature fork
+
+Release 1.1.1 is maintained for
+[AaronWangTT/HomeTemperature](https://github.com/AaronWangTT/HomeTemperature).
+It adds bounded packet handling, send-error reporting, reusable responder
+lifecycle methods, and a borrowed transport abstraction for platforms without
+the Arduino `UDP` base class. Existing sketches that pass an `EthernetUDP` or
+`WiFiUDP` instance to `MDNS` remain source-compatible. Custom transports can
+pass `false` as the second constructor argument to skip the legacy WIZnet boot
+delay. Release 1.1.1 additionally validates DNS names and record lengths,
+preserves state across allocation and transport failures, fixes DNS-SD query
+and TXT encoding, handles full 14-bit compression offsets, and makes timeout
+callbacks safe to re-enter.
+
+## Host tests
+
+The parser and lifecycle regression suite runs with AddressSanitizer and
+UndefinedBehaviorSanitizer:
+
+```sh
+cmake -S tests/host -B build/host -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/host --parallel
+ctest --test-dir build/host --output-on-failure
+```
+
+## TXT record encoding
+
+The `textContent` argument to `addServiceRecord()` uses the library's existing
+wire-format contract: pass one or more DNS character-strings, each prefixed by
+its one-byte length. For example, `"\x06" "path=/"` advertises `path=/`.
+Malformed character-string sequences are rejected.
+
 ## Requirements
 
-Any Arduino core and networking library that supports the new `virtual` `UDP::beginMulticast(...)` method, including:
+Any Arduino core and networking library that provides a UDP-compatible object
+with the operations used by `MDNS`, including:
 
  * AVR core 1.6.18 or later (bundled with IDE 1.8.2 and later) for AVR boards
  * SAMD core 1.6.13 or later for SAMD boards

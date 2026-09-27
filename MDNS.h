@@ -27,7 +27,7 @@ extern "C" {
 
 #include <Arduino.h>
 #include <IPAddress.h>
-#include <Udp.h>
+#include "MDNSTransport.h"
 
 typedef uint8_t byte;
 
@@ -79,7 +79,13 @@ typedef void (*MDNSServiceFoundCallback)(const char*, MDNSServiceProtocol_t, con
 class MDNS
 {
 private:
-   UDP*                  _udp;
+   MDNS(const MDNS&) = delete;
+   MDNS& operator=(const MDNS&) = delete;
+
+   MDNSTransport         _transport;
+   MDNSTransport*        _udp;
+   bool                  _waitForNetworkHardware;
+   bool                  _writeFailed;
    IPAddress             _ipAddress;
    MDNSDataInternal_t    _mdnsData;
    MDNSState_t           _state;
@@ -96,10 +102,13 @@ private:
    MDNSNameFoundCallback      _nameFoundCallback;
    MDNSServiceFoundCallback   _serviceFoundCallback;
 
+   void _initialize();
+
    MDNSError_t _processMDNSQuery();
    MDNSError_t _sendMDNSMessage(uint32_t peerAddress, uint32_t xid, int type, int serviceRecord);
 
 
+   bool _writeBytes(const uint8_t* buffer, size_t size);
    void _writeDNSName(const uint8_t* name, uint16_t* pPtr, uint8_t* buf, int bufSize,
                       int zeroTerminate);
    void _writeMyIPAnswerRecord(uint16_t* pPtr, uint8_t* buf, int bufSize);
@@ -121,11 +130,20 @@ private:
    
    void _finishedResolvingName(char* name, const byte ipAddr[4]);
 public:
-   MDNS(UDP& udp);
+   template <typename Transport>
+   MDNS(Transport& udp, bool waitForNetworkHardware = true)
+      : _transport(udp),
+        _udp(&_transport),
+        _waitForNetworkHardware(waitForNetworkHardware)
+   {
+      _initialize();
+   }
    ~MDNS();
    
    int begin(const IPAddress& ip);
    int begin(const IPAddress& ip, const char* name);
+   void end();
+   int announce();
    void run();
    
    int setName(const char* name);
