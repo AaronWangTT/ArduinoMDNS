@@ -314,6 +314,10 @@ static void permutationsAndAssociation()
    }
    { Session s; s.discover(); Packet p; p.ptr(); p.srv(); p.a("unrelated.local"); s.feed(p); assert(events.empty()); }
    { Session s; s.discover(); Packet p; p.ptr(); p.srv("Printer", "."); p.a(); s.feed(p); assert(events.empty()); }
+   { Session s; s.discover(); Packet p; p.ptr(); p.srv("Printer", "device.local", 0); p.a();
+      s.feed(p); assert(events.empty() && s.mdns.isDiscoveringService());
+      assert(s.mdns.lastError() == MDNSSuccess);
+      s.feed(fullPacket()); assert(events.size() == 1 && events[0].port == 80); }
    { Session s; s.discover(); Packet p = fullPacket(); p.patch(6, 1); p.patch(10, 3); s.feed(p); assert(events.size() == 1); }
    { Session s; s.discover(); Packet p; p.ptr(); p.srv(); p.a(); p.txt(Bytes()); s.feed(p);
       assert(events.size() == 1 && events[0].present && events[0].txt.empty()); }

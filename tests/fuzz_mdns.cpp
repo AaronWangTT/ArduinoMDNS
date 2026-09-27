@@ -49,7 +49,7 @@ static std::vector<uint8_t> structured(const uint8_t* data, size_t size)
    std::vector<uint8_t> out(12, 0); out[2] = 0x84; out[7] = 4;
    rr(out, "_http._tcp.local", 12, 23); name(out, "Fuzz._http._tcp.local");
    rr(out, "Fuzz._http._tcp.local", 33, 20);
-   u16(out, 0); u16(out, 0); u16(out, 80); name(out, "device.local");
+   u16(out, 0); u16(out, 0); u16(out, size && (data[0] & 32) ? 0 : 80); name(out, "device.local");
    rr(out, "device.local", 1, 4);
    out.push_back(10); out.push_back(0); out.push_back(0); out.push_back(1);
    size_t count = std::min(size, size_t(MDNS_MAX_TXT_SIZE - 1));

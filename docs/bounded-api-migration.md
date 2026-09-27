@@ -172,8 +172,8 @@ Existing larger margins are preserved. Other libraries, interrupts and
 callbacks still need their own stack budgeting.
 
 With Arduino AVR core 1.8.8, Ethernet 2.0.2 and the standard Leonardo board
-configuration, the Ethernet registration examples use 28,500 bytes of flash
-without TXT and 28,612 with TXT, both below the 28,672-byte limit. Checked
+configuration, the Ethernet registration examples use 28,508 bytes of flash
+without TXT and 28,620 with TXT, both below the 28,672-byte limit. Checked
 serialization preflights exact wire lengths arithmetically, bounds writes by
 the actual allocation and verifies the final length. Shared error handling and
 combined validation/sizing reduce flash without disabling parser features or
@@ -200,7 +200,8 @@ packet-derived response or callback. Trailing undeclared bytes, forward/self
 compression pointers and malformed unrelated records reject the whole packet.
 Discovery only joins records within one response datagram, using exact
 case-insensitive label equality for PTR instance, SRV owner/target, A owner and
-TXT owner. Missing PTR/SRV/A sets and root SRV targets produce no callback.
+TXT owner. Missing PTR/SRV/A sets, root SRV targets and zero SRV ports produce
+no callback; a zero port remains an unusable endpoint as in maintained 1.1.1.
 TXT is optional; TTL-zero records cannot create positive results.
 There is no unrelated-address fallback or cross-datagram cache.
 

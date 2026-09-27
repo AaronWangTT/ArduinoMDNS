@@ -846,6 +846,7 @@ void MDNS::_process(const uint8_t* data, size_t length)
       memmove(instance, work.left + 1, instanceLength); instance[instanceLength] = 0;
       strcpy(type, _queries[1].display);
       uint16_t port = uint16_t(uint16_t(data[candidate.srv + 4]) << 8) | data[candidate.srv + 5];
+      if (!port) continue;
       const uint8_t* txt = NULL;
       if (candidate.txt) {
          memcpy(work.right, data + candidate.txt, candidate.txtLength);
