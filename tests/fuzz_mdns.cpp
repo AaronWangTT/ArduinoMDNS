@@ -6,17 +6,23 @@
 uint32_t mdnsTestMillis = 3000;
 static MDNS* current;
 static unsigned callbacks;
+static uint8_t callbackControl;
 static void found(const char*, MDNSServiceProtocol_t, const char*, IPAddress,
                   unsigned short, const uint8_t*, size_t)
 {
    if (++callbacks == 1) {
-      current->stopDiscoveringService();
-      current->startDiscoveringService("_http", MDNSServiceTCP, 32);
+      if (callbackControl & 4) current->end();
+      else {
+         current->stopDiscoveringService();
+         current->startDiscoveringService("_http", MDNSServiceTCP, 32);
+      }
+      if (callbackControl & 8) current->announce();
       current->run();
    }
 }
 static void resolved(const char*, IPAddress)
 {
+   if (callbackControl & 16) current->end();
    current->cancelResolveName();
    current->resolveName("next", 32);
 }
@@ -68,7 +74,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
    if (size > MDNS_MAX_PACKET_SIZE + 1) return 0;
    FakeUDP udp;
-   MDNS mdns(udp); current = &mdns; callbacks = 0;
+   callbackControl = size ? data[0] : 0;
+   MDNS mdns(udp, (callbackControl & 2) == 0); current = &mdns; callbacks = 0;
    mdnsTestMillis = 0xfffffff0u;
    mdns.begin(IPAddress(10,0,0,1), "device");
    mdns.setNameResolvedCallback(resolved);
@@ -118,9 +125,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
             mdns.run();
             break;
          case 6:
-            mdns.begin(IPAddress(10,0,0,1), amount & 1 ? "device" : "next");
+            if (control & 8) mdns.end();
+            else mdns.begin(IPAddress(10,0,0,1), amount & 1 ? "device" : "next");
             break;
          case 7:
+            if (control & 8) { mdns.announce(); break; }
             mdns.setServiceFoundBinaryCallback(amount & 1 ? found : NULL);
             mdns.setName(amount & 2 ? "device" : "next");
             mdns.run();

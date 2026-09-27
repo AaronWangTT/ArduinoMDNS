@@ -2,9 +2,12 @@
 
 Rebuild sketches and libraries together: existing method signatures and the
 `1` success / `0` failure convention remain source compatible, but object and
-record layouts have changed. The UDP object is borrowed, must outlive `MDNS`,
+record layouts have changed. The transport object is borrowed, must outlive `MDNS`,
 and must be used exclusively by this instance. Instances are noncopyable to
 prevent duplicate ownership and double destruction of their allocated state.
+The maintained `MDNS(Transport&, bool waitForNetworkHardware = true)` constructor
+uses `MDNSTransport` type erasure; the transport need not inherit Arduino's UDP
+base. Passing `false` disables the startup hardware grace period.
 
 ## Names and TXT
 
@@ -58,6 +61,12 @@ interrupt-driven calls and deleting `MDNS` from its own callback are unsupported
 Destruction frees all owned storage, stops the socket, and never sends
 goodbyes or deletes the borrowed UDP object.
 
+Explicit `end()` sends service goodbyes, clears all owned names/records/queries
+and stops the transport even when a goodbye fails; repeated calls are safe.
+`announce()` attempts the host address and every registered service, returning
+`1` only if all sends succeed. Failed announcements leave the success timestamp
+unchanged and automatic retries remain rate-limited.
+
 Timeout zero means unlimited. Finite timeouts are at most `0x7fffffff`
 milliseconds. Service `run()` at least once per `0x7fffffff` milliseconds;
 elapsed unsigned 32-bit subtraction handles a clock wrap. Name timeout retains
@@ -79,8 +88,10 @@ Once a valid replacement query is installed, failed initial transmission
 returns zero and leaves that query inactive. Failed registration owns no new
 record. Removal always frees the local record even if the goodbye fails.
 `setName()` also preflights existing registrations against the packet cap.
-Repeated `begin()` preserves services, replaces the name, cancels queries and
-rejoins the transport. Failed rejoin leaves transport unavailable; explicit
+Successful repeated `begin()` tears down existing services and queries, replaces
+the name and rejoins the transport, preserving the maintained lifecycle API.
+Invalid input or replacement-name allocation failure leaves the previous state
+intact. Failed rejoin leaves transport unavailable; explicit
 `begin()` is needed to retry after recovery failure.
 
 Every begin/write/end result is checked. A short write never calls
@@ -126,7 +137,7 @@ is 886 bytes on x86-64 or 604 bytes on AVR. TXT dispatch reuses the second name
 buffer; callback name snapshots reuse the first. Host-only resolution and
 responder questions allocate only `N` bytes, freed before callback/send.
 
-In the x86-64 sanitizer/allocation-failure suite, `sizeof(MDNS)` is 208 bytes.
+In the x86-64 sanitizer/allocation-failure suite, `sizeof(MDNS)` is 288 bytes.
 The ordinary host-answer fixture peaks at 91 bytes of production heap and the
 ordinary service fixture at 374. An exact-cap packet with a 255-byte name,
 maximum TXT and callback restart peaks at 1,193 bytes with cap512, or 2,153
@@ -161,8 +172,8 @@ Existing larger margins are preserved. Other libraries, interrupts and
 callbacks still need their own stack budgeting.
 
 With Arduino AVR core 1.8.8, Ethernet 2.0.2 and the standard Leonardo board
-configuration, the Ethernet registration examples use 28,458 bytes of flash
-without TXT and 28,586 with TXT, both below the 28,672-byte limit. Checked
+configuration, the Ethernet registration examples use 28,500 bytes of flash
+without TXT and 28,612 with TXT, both below the 28,672-byte limit. Checked
 serialization preflights exact wire lengths arithmetically, bounds writes by
 the actual allocation and verifies the final length. Shared error handling and
 combined validation/sizing reduce flash without disabling parser features or

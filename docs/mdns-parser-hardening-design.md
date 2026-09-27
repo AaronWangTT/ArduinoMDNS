@@ -7,6 +7,14 @@ contracts, measured memory budgets, and remaining hardware verification gate.
 Review baseline: `master`, commit
 `394dca9dc4d5f1eb20140d524c8b2f2366a53cfa`.
 
+Remote-base integration also preserves maintained master
+`7f206ac537a700edd1f90e55805cda6a3a8cdbe9` (release 1.1.1). The initial local
+tracking reference was stale. Its generic borrowed transport, constructor
+delay opt-out, reusable `end()`/`announce()` lifecycle, release metadata, and
+public-API regression suite are part of the compatibility baseline; they must
+not be overwritten by the parser refactor. Qualification is repeated after
+that integration, not inferred from the earlier head's passing results.
+
 ## 1. Scope and goals
 
 This work addresses the six areas of the focused review:

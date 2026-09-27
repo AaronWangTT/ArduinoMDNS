@@ -27,7 +27,7 @@ extern "C" {
 
 #include <Arduino.h>
 #include <IPAddress.h>
-#include <Udp.h>
+#include "MDNSTransport.h"
 
 typedef uint8_t byte;
 
@@ -110,7 +110,8 @@ private:
       uint32_t started, duration, attempted, sent, generation;
       MDNSServiceProtocol_t proto;
    };
-   UDP* _udp;
+   MDNSTransport _udp;
+   bool _waitForNetworkHardware;
    IPAddress _ipAddress;
    uint8_t* _name;
    MDNSServiceRecord_t* _serviceRecords[NumMDNSServiceRecords];
@@ -122,6 +123,8 @@ private:
    MDNSServiceFoundCallback _serviceFoundCallback;
    MDNSServiceFoundBinaryCallback _binaryCallback;
 
+   void _initialize();
+   void _release(bool goodbye);
    void _resetError();
    void _fail(MDNSError_t error);
    bool _recover();
@@ -140,11 +143,19 @@ private:
    MDNS(const MDNS&);
    MDNS& operator=(const MDNS&);
 public:
-   MDNS(UDP& udp);
+   template <typename Transport>
+   MDNS(Transport& udp, bool waitForNetworkHardware = true)
+      : _udp(udp),
+        _waitForNetworkHardware(waitForNetworkHardware)
+   {
+      _initialize();
+   }
    ~MDNS();
    
    int begin(const IPAddress& ip);
    int begin(const IPAddress& ip, const char* name);
+   void end();
+   int announce();
    void run();
    
    int setName(const char* name);

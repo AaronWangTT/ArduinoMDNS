@@ -210,23 +210,54 @@ void serializeRecord(Writer& w, const uint8_t* host, const IPAddress& ip,
 }
 }
 
-MDNS::MDNS(UDP& udp) : _udp(&udp), _name(NULL),
-   _lastAnnounceMillis(0), _lastAnnounceAttempt(0), _available(false),
-   _running(false), _error(MDNSSuccess), _nameFoundCallback(NULL),
-   _serviceFoundCallback(NULL), _binaryCallback(NULL)
+void MDNS::_initialize()
 {
+   _name = NULL;
+   _lastAnnounceMillis = _lastAnnounceAttempt = 0;
+   _available = _running = false;
+   _error = MDNSSuccess;
+   _nameFoundCallback = NULL;
+   _serviceFoundCallback = NULL;
+   _binaryCallback = NULL;
    memset(_serviceRecords, 0, sizeof(_serviceRecords));
    memset(_queries, 0, sizeof(_queries));
 }
 
 MDNS::~MDNS()
 {
-   for (uint8_t i = 0; i < 2; ++i) _cancelQuery(i);
-   for (int i = 0; i < NumMDNSServiceRecords; ++i) _removeServiceRecord(i, false);
-   free(_name);
-   _udp->stop();
+   _release(false);
 }
 
+void MDNS::end()
+{
+   _resetError();
+   _release(true);
+}
+
+void MDNS::_release(bool goodbye)
+{
+   for (int i = 0; i < NumMDNSServiceRecords; ++i) _removeServiceRecord(i, goodbye);
+   for (uint8_t i = 0; i < 2; ++i) _cancelQuery(i);
+   free(_name); _name = NULL;
+   _udp.stop();
+   _available = false;
+   _lastAnnounceMillis = _lastAnnounceAttempt = 0;
+}
+
+int MDNS::announce()
+{
+   _resetError();
+   _lastAnnounceAttempt = uint32_t(millis());
+   bool success = _sendRecord(-1, kTTL);
+   for (int i = 0; i < NumMDNSServiceRecords; ++i)
+      if (_serviceRecords[i] && !_sendRecord(i, kTTL)) success = false;
+   if (success) _lastAnnounceMillis = uint32_t(millis());
+   return success ? 1 : 0;
+}
+
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
 void MDNS::_resetError() { if (!_running) _error = MDNSSuccess; }
 #if defined(__GNUC__)
 __attribute__((noinline))
@@ -239,13 +270,15 @@ int MDNS::begin(const IPAddress& ip, const char* name)
 {
    _resetError();
    if (_running) { _fail(MDNSAlreadyProcessingQuery); return 0; }
-   if (!setName(name)) return 0;
+   if (!validInputName(name, MDNSServiceTCP, 0)) { _fail(MDNSInvalidArgument); return 0; }
+   uint8_t* next = makeName(name, MDNSServiceTCP, 0);
+   if (!next) { _fail(MDNSOutOfMemory); return 0; }
+   _release(true);
+   _name = next;
    // Preserve the original WIZnet startup grace period for immediate announcements.
-   while (uint32_t(millis()) < 3000) delay(100);
-   for (uint8_t i = 0; i < 2; ++i) _cancelQuery(i);
+   if (_waitForNetworkHardware) while (uint32_t(millis()) < 3000) delay(100);
    _ipAddress = ip;
-   _udp->stop();
-   _available = _udp->beginMulticast(IPAddress(multicastAddress), kPort) == 1;
+   _available = _udp.beginMulticast(IPAddress(multicastAddress), kPort) == 1;
    if (!_available) { _fail(MDNSSocketError); return 0; }
    _lastAnnounceMillis = _lastAnnounceAttempt = uint32_t(millis());
    return 1;
@@ -269,8 +302,8 @@ int MDNS::setName(const char* name)
 
 bool MDNS::_recover()
 {
-   _udp->stop();
-   _available = _udp->beginMulticast(IPAddress(multicastAddress), kPort) == 1;
+   _udp.stop();
+   _available = _udp.beginMulticast(IPAddress(multicastAddress), kPort) == 1;
    if (!_available) _fail(MDNSSocketError);
    return _available;
 }
@@ -278,13 +311,13 @@ bool MDNS::_recover()
 bool MDNS::_send(const uint8_t* data, size_t length)
 {
    if (!_available) { _fail(MDNSSocketError); return false; }
-   if (_udp->beginPacket(IPAddress(multicastAddress), kPort) != 1) {
+   if (_udp.beginPacket(IPAddress(multicastAddress), kPort) != 1) {
       _fail(MDNSSocketError); _recover(); return false;
    }
-   if (_udp->write(data, length) != length) {
+   if (_udp.write(data, length) != length) {
       _fail(MDNSSocketError); _recover(); return false;
    }
-   if (_udp->endPacket() != 1) {
+   if (_udp.endPacket() != 1) {
       _fail(MDNSSocketError); _recover(); return false;
    }
    return true;
@@ -489,17 +522,17 @@ void MDNS::_timeoutService()
 
 void MDNS::_receive()
 {
-   int advertised = _udp->parsePacket();
+   int advertised = _udp.parsePacket();
    if (!advertised) return;
    if (advertised < 0) { _fail(MDNSSocketError); _recover(); return; }
-   const uint16_t peerPort = _udp->remotePort();
+   const uint16_t peerPort = _udp.remotePort();
    if (advertised < 12 || size_t(advertised) > MDNS_MAX_PACKET_SIZE) {
       _fail(advertised < 12 ? MDNSMalformedPacket : MDNSResourceLimit);
       _recover(); return;
    }
    uint8_t* packet = static_cast<uint8_t*>(allocateBytes(size_t(advertised), false, 320));
    if (!packet) { _fail(MDNSOutOfMemory); _recover(); return; }
-   int received = _udp->read(packet, size_t(advertised));
+   int received = _udp.read(packet, size_t(advertised));
    if (received != advertised) {
       free(packet); _fail(MDNSSocketError); _recover(); return;
    }
@@ -611,18 +644,31 @@ size_t decode(mdns::PacketView packet, size_t start, size_t end, uint8_t* output
       return 0;
    return expanded;
 }
+bool equalWireNames(const uint8_t* a, size_t aLength, const uint8_t* b, size_t bLength)
+{
+   if (aLength != bLength) return false;
+   // Decoder/registration validation precedes every call. Length bytes <= 63
+   // cannot be ASCII uppercase, so folding preserves complete label boundaries.
+   for (size_t i = 0; i < aLength; ++i) {
+      uint8_t left = a[i], right = b[i];
+      if (left >= 'A' && left <= 'Z') left += 'a' - 'A';
+      if (right >= 'A' && right <= 'Z') right += 'a' - 'A';
+      if (left != right) return false;
+   }
+   return true;
+}
 bool equalAt(mdns::PacketView packet, size_t start, size_t end,
              const uint8_t* wire, uint8_t* scratch, size_t capacity)
 {
    size_t size = decode(packet, start, end, scratch, capacity);
-   return size && mdns::namesEqual(scratch, size, wire, wireSize(wire));
+   return size && equalWireNames(scratch, size, wire, wireSize(wire));
 }
 bool equalOffsets(mdns::PacketView packet, size_t a, size_t aEnd,
                   size_t b, size_t bEnd, Assembly& work)
 {
    size_t aSize = decode(packet, a, aEnd, work.left, work.nameCapacity);
    size_t bSize = decode(packet, b, bEnd, work.right, work.nameCapacity);
-   return aSize && bSize && mdns::namesEqual(work.left, aSize, work.right, bSize);
+   return aSize && bSize && equalWireNames(work.left, aSize, work.right, bSize);
 }
 MDNSError_t findAddress(mdns::PacketView packet, const mdns::DnsHeader& header,
                         const uint8_t* name, uint8_t* scratch, size_t capacity, size_t& address)
@@ -656,7 +702,7 @@ MDNSError_t assembleServices(mdns::PacketView packet, const mdns::DnsHeader& hea
                          work.left, work.nameCapacity);
       size_t first = size_t(work.left[0]) + 1;
       if (!n || first >= n || !printable(reinterpret_cast<char*>(work.left + 1), first - 1) ||
-          !mdns::namesEqual(work.left + first, n - first, query, wireSize(query)))
+          !equalWireNames(work.left + first, n - first, query, wireSize(query)))
          return MDNSUnrepresentableName;
       size_t c = 0;
       for (; c < count; ++c)
