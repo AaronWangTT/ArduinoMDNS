@@ -20,6 +20,7 @@ unsigned long testMillis = 4000;
 int serviceCallbacks = 0;
 unsigned short lastServicePort = 0;
 bool failNextMalloc = false;
+int mallocCalls = 0;
 MDNS* callbackMdns = NULL;
 int nameCallbacks = 0;
 
@@ -31,6 +32,7 @@ extern "C" void *__wrap_malloc(size_t size)
         failNextMalloc = false;
         return NULL;
     }
+    ++mallocCalls;
     return __real_malloc(size);
 }
 
@@ -48,7 +50,8 @@ class PacketTransport {
 public:
     PacketTransport()
         : offset(0), sender(192, 0, 2, 20), senderPort(5353),
-          sends(0), open(false), allowSend(true) {}
+          sends(0), writes(0), open(false), allowSend(true),
+          shortWriteOnCall(0) {}
 
     uint8_t beginMulticast(IPAddress, uint16_t) {
         open = true;
@@ -67,8 +70,13 @@ public:
     }
 
     size_t write(const uint8_t *buffer, size_t size) {
-        output.insert(output.end(), buffer, buffer + size);
-        return size;
+        ++writes;
+        size_t written = size;
+        if (writes == shortWriteOnCall && size > 0) {
+            written = size - 1;
+        }
+        output.insert(output.end(), buffer, buffer + written);
+        return written;
     }
 
     int endPacket() {
@@ -112,8 +120,10 @@ public:
     IPAddress sender;
     uint16_t senderPort;
     int sends;
+    int writes;
     bool open;
     bool allowSend;
+    int shortWriteOnCall;
 };
 
 #define REQUIRE(condition) \
@@ -470,6 +480,67 @@ bool undersizedPtrRecordIsRejected()
     return true;
 }
 
+bool ptrInstanceCannotCrossRdataBoundary()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+    mdns.setServiceFoundCallback(ignoreService);
+    REQUIRE(mdns.startDiscoveringService("_http", MDNSServiceTCP, 1000) == 1);
+
+    std::vector<uint8_t> packet;
+    writeHeader(packet, 0, 1);
+    const uint8_t record[] = {
+        0xc0, 0x0c,
+        0x00, 0x0c,
+        0x00, 0x01,
+        0x00, 0x00, 0x00, 0x78,
+        0x00, 0x02,
+        0x03, 'f',
+        'o', 'o'
+    };
+    packet.insert(packet.end(), record, record + sizeof(record));
+    int allocationsBeforePacket = mallocCalls;
+    transport.queue(packet.data(), packet.size());
+    mdns.run();
+
+    REQUIRE(mallocCalls == allocationsBeforePacket + 1);
+    REQUIRE(serviceCallbacks == 0);
+    return true;
+}
+
+bool failedAnnouncementsAreRetried()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+    REQUIRE(mdns.addServiceRecord("device._http", 80, MDNSServiceTCP) == 1);
+
+    testMillis = 100000;
+    transport.allowSend = false;
+    REQUIRE(mdns.announce() == 0);
+    int sendsAfterFailure = transport.sends;
+
+    transport.allowSend = true;
+    mdns.run();
+    REQUIRE(transport.sends == sendsAfterFailure + 1);
+    return true;
+}
+
+bool shortWritesFailTheSend()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
+    mdns.setNameResolvedCallback(ignoreName);
+
+    transport.shortWriteOnCall = 2;
+    REQUIRE(mdns.resolveName("device", 1000) == 0);
+    REQUIRE(mdns.isResolvingName() == 0);
+    REQUIRE(transport.sends == 0);
+    return true;
+}
+
 bool undersizedSrvRecordIsRejected()
 {
     PacketTransport transport;
@@ -601,6 +672,9 @@ int main()
         {"service query uses four-byte trailer", serviceQueryUsesFourByteTrailer},
         {"truncated response name is rejected", truncatedResponseNameIsRejected},
         {"undersized PTR record is rejected", undersizedPtrRecordIsRejected},
+        {"PTR instance stays within RDATA", ptrInstanceCannotCrossRdataBoundary},
+        {"failed announcements are retried", failedAnnouncementsAreRetried},
+        {"short writes fail the send", shortWritesFailTheSend},
         {"undersized SRV record is rejected", undersizedSrvRecordIsRejected},
         {"preserves full compression offsets", preservesFullCompressionOffsets},
     };

@@ -85,6 +85,7 @@ private:
    MDNSTransport         _transport;
    MDNSTransport*        _udp;
    bool                  _waitForNetworkHardware;
+   bool                  _writeFailed;
    IPAddress             _ipAddress;
    MDNSDataInternal_t    _mdnsData;
    MDNSState_t           _state;
@@ -107,6 +108,7 @@ private:
    MDNSError_t _sendMDNSMessage(uint32_t peerAddress, uint32_t xid, int type, int serviceRecord);
 
 
+   bool _writeBytes(const uint8_t* buffer, size_t size);
    void _writeDNSName(const uint8_t* name, uint16_t* pPtr, uint8_t* buf, int bufSize,
                       int zeroTerminate);
    void _writeMyIPAnswerRecord(uint16_t* pPtr, uint8_t* buf, int bufSize);
