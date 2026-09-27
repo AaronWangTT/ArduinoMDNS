@@ -25,6 +25,8 @@ fi
 tests=(test_baseline test_dns_packet test_mdns)
 if [[ "${MDNS_BASELINE_ONLY:-0}" == 1 ]]; then
    tests=(test_baseline test_legacy_baseline)
+elif [[ "${MDNS_PARSER_ONLY:-0}" == 1 ]]; then
+   tests=(test_dns_packet)
 fi
 for test in "${tests[@]}"; do
    if [[ ! -f "tests/$test.cpp" ]]; then
