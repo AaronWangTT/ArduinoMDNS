@@ -3,7 +3,8 @@
 Rebuild sketches and libraries together: existing method signatures and the
 `1` success / `0` failure convention remain source compatible, but object and
 record layouts have changed. The UDP object is borrowed, must outlive `MDNS`,
-and must be used exclusively by this instance.
+and must be used exclusively by this instance. Instances are noncopyable to
+prevent duplicate ownership and double destruction of their allocated state.
 
 ## Names and TXT
 

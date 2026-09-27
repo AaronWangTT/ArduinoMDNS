@@ -1,6 +1,8 @@
 # Bounded mDNS parser and lifecycle hardening
 
-Status: proposed design and implementation plan; no production changes yet.
+Status: P0-P6 implemented; P7 release qualification is in progress.
+See the [API migration guide](bounded-api-migration.md) for the implemented
+contracts, measured memory budgets, and remaining hardware verification gate.
 
 Review baseline: `master`, commit
 `394dca9dc4d5f1eb20140d524c8b2f2366a53cfa`.
@@ -456,21 +458,28 @@ Proposed gates:
 - Exercise bad-then-good receive and failed-then-successful send on Ethernet
   and WiFi101 backends. A fake UDP test cannot prove real backend recovery.
 
-## 11. Decisions to approve before implementation
+## 11. Implementation resolutions and remaining gate
 
-The plan recommends policies but does not silently approve behavior changes:
-
-1. Receive/transmit byte caps and scratch-memory budgets for small AVR versus
-   32-bit targets. Measure first; do not impose a guessed universal 512-byte
-   DNS cap or allocate buffers for the full protocol maximum on small MCUs.
-2. Legacy name presentation for embedded dot/NUL labels and malformed legacy
-   TXT input, including release-note wording.
-3. Exact status-accessor signature/reset semantics and nested `run()` behavior.
-4. UDP backend abort/discard/rejoin behavior and whether exclusive ownership
-   of the supplied UDP socket can be documented as a requirement.
-5. Registration/query failure atomicity and duplicate/conflicting RR policy.
-6. Keep cross-packet assembly deferred, or fund a separate bounded-cache
-   design if interoperability testing shows it is required for the release.
+1. Packet caps are 512 bytes on AVR and 1472 elsewhere. Scratch is sized to
+   actual expanded names, TXT, and candidates, rather than fixed worst-case
+   arrays. Small-AVR discovery is retained, with explicit allocation/resource
+   failures and additional heap-growth headroom instead of a blanket SRAM
+   floor. Host ABI measurements do not prove AVR heap/stack safety.
+2. Literal dots in a service instance remain within that label. Unrepresentable
+   callback names and malformed legacy TXT fail explicitly. Legacy TXT is not
+   double-encoded, and empty outgoing TXT is normalized to `00`.
+3. `lastError()` is additive; original `1`/`0` methods retain their return
+   contract. Nested `run()` is rejected without recursive dispatch.
+4. Recovery uses socket close/rejoin, not `flush()`. The borrowed UDP socket is
+   exclusively used by the instance. Inspection of Ethernet 2.0.2 and WiFi101
+   0.16.1 confirms their reset paths, but hardware tests remain necessary:
+   source inspection, host fakes, and successful compilation are not a
+   substitute for physical multicast/recovery and SRAM high-water validation.
+5. Failed registration owns no hidden new record; replacement allocation
+   preserves old state. Identical duplicate RRs are deduplicated within a
+   packet and conflicting data fails explicitly.
+6. Cross-packet assembly remains deferred. No TTL cache, eviction policy, or
+   cross-packet deduplication was introduced.
 
 Successful completion means the six scoped surfaces are wired through the
 same validated paths, measured on supported targets, and covered by
