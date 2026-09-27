@@ -128,7 +128,7 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $repositoryRoot 'ArduinoMDNS.h')) -or
         -not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'MulticastMdnsTest.ino'))) {
-        throw 'Run this script in ArduinoMDNS\tests\hardware\MulticastMdnsTest with its matching sketch.'
+        throw 'Run this script in ArduinoMDNS\extras\hardware\MulticastMdnsTest with its matching sketch.'
     }
     $summary.sourceHashes = Get-InputHashes
     $summary.libraryRevision = (& git -C $repositoryRoot rev-parse HEAD | Out-String).Trim()

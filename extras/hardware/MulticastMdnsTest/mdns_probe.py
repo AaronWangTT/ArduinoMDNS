@@ -60,6 +60,7 @@ def decode_name(packet, offset):
     cursor = offset
     jumped = False
     visited = set()
+    expanded_length = 1
     while True:
         if cursor >= len(packet) or cursor in visited:
             raise ValueError("Invalid or cyclic DNS name")
@@ -70,7 +71,10 @@ def decode_name(packet, offset):
                 raise ValueError("Truncated DNS compression pointer")
             if not jumped:
                 consumed += 2
-            cursor = ((length & 0x3F) << 8) | packet[cursor + 1]
+            target = ((length & 0x3F) << 8) | packet[cursor + 1]
+            if target >= cursor:
+                raise ValueError("DNS compression pointers must refer backwards")
+            cursor = target
             jumped = True
             continue
         if length & 0xC0:
@@ -82,6 +86,9 @@ def decode_name(packet, offset):
             return ".".join(labels).lower(), consumed
         if length > 63 or cursor + length > len(packet):
             raise ValueError("Invalid DNS label length")
+        expanded_length += length + 1
+        if expanded_length > 255:
+            raise ValueError("Expanded DNS name exceeds 255 bytes")
         labels.append(packet[cursor:cursor + length].decode("ascii"))
         cursor += length
         if not jumped:
@@ -123,12 +130,14 @@ def parse_message(packet):
             "ttl": ttl,
             "data": packet[data_offset:data_end],
         }
-        if record_type == 1 and data_length == 4:
+        if record_type == 1:
+            if data_length != 4:
+                raise ValueError("Invalid A record length")
             record["address"] = socket.inet_ntoa(record["data"])
         elif record_type == 12:
             record["target"], consumed = decode_name(packet, data_offset)
-            if consumed > data_length:
-                raise ValueError("PTR target exceeds RDATA")
+            if consumed != data_length:
+                raise ValueError("PTR target does not fill RDATA")
         elif record_type == 33:
             if data_length < 6:
                 raise ValueError("Truncated SRV record")
@@ -136,8 +145,8 @@ def parse_message(packet):
                 "!HHH", packet[data_offset:data_offset + 6]
             )
             record["target"], consumed = decode_name(packet, data_offset + 6)
-            if 6 + consumed > data_length:
-                raise ValueError("SRV target exceeds RDATA")
+            if 6 + consumed != data_length:
+                raise ValueError("SRV target does not fill RDATA")
         elif record_type == 16:
             strings = []
             cursor = data_offset
@@ -151,6 +160,8 @@ def parse_message(packet):
             record["strings"] = strings
         records.append(record)
         offset = data_end
+    if offset != len(packet):
+        raise ValueError("Undeclared trailing DNS data")
     return flags, records
 
 
@@ -161,7 +172,7 @@ def wait_for_response(sock, board, predicate, timeout=8):
             data, source = sock.recvfrom(4096)
         except socket.timeout:
             continue
-        if source[0] != board or len(data) < 12:
+        if source[0] != board or source[1] != PORT or len(data) < 12:
             continue
         try:
             flags, records = parse_message(data)
@@ -247,7 +258,11 @@ def probe(local_address, board, send_only):
 def iter_pcapng_data(data):
     offset = 0
     byte_order = "<"
-    while offset + 12 <= len(data):
+    have_section = False
+    interfaces = []
+    while offset < len(data):
+        if len(data) - offset < 12:
+            raise RuntimeError("Truncated PCAPNG block header")
         raw_type = data[offset:offset + 4]
         if raw_type == b"\x0a\x0d\x0d\x0a":
             magic = data[offset + 8:offset + 12]
@@ -261,7 +276,7 @@ def iter_pcapng_data(data):
         else:
             block_type = struct.unpack_from(byte_order + "I", data, offset)[0]
         block_length = struct.unpack_from(byte_order + "I", data, offset + 4)[0]
-        if block_length < 12 or offset + block_length > len(data):
+        if block_length < 12 or block_length % 4 or offset + block_length > len(data):
             raise RuntimeError("Invalid PCAPNG block length")
         trailing_length = struct.unpack_from(
             byte_order + "I", data, offset + block_length - 4
@@ -269,13 +284,40 @@ def iter_pcapng_data(data):
         if trailing_length != block_length:
             raise RuntimeError("Mismatched PCAPNG block lengths")
         if block_type == 0x0A0D0D0A:
-            pass
-        elif block_type == 6 and block_length >= 32:
+            if block_length < 28:
+                raise RuntimeError("Truncated PCAPNG section header")
+            have_section = True
+            interfaces = []
+        elif not have_section:
+            raise RuntimeError("Missing PCAPNG section header")
+        elif block_type == 1:
+            if block_length < 20:
+                raise RuntimeError("Truncated PCAPNG interface description")
+            link_type = struct.unpack_from(byte_order + "H", data, offset + 8)[0]
+            snap_length = struct.unpack_from(byte_order + "I", data, offset + 12)[0]
+            interfaces.append((link_type, snap_length))
+        elif block_type == 6:
+            if block_length < 32:
+                raise RuntimeError("Truncated PCAPNG enhanced packet block")
+            interface_id = struct.unpack_from(byte_order + "I", data, offset + 8)[0]
+            if interface_id >= len(interfaces):
+                raise RuntimeError("Undefined PCAPNG packet interface")
+            link_type, snap_length = interfaces[interface_id]
+            if link_type != 1:
+                raise RuntimeError("TTL validation requires Ethernet PCAPNG packets")
             captured_length = struct.unpack_from(
                 byte_order + "I", data, offset + 20
             )[0]
+            original_length = struct.unpack_from(byte_order + "I", data, offset + 24)[0]
+            padded_length = (captured_length + 3) & ~3
+            if captured_length > original_length or padded_length > block_length - 32:
+                raise RuntimeError("Captured packet length exceeds PCAPNG packet block")
+            if snap_length and captured_length > snap_length:
+                raise RuntimeError("Captured packet length exceeds interface snapshot length")
             packet_start = offset + 28
             yield data[packet_start:packet_start + captured_length]
+        elif block_type in (2, 3):
+            raise RuntimeError("TTL validation requires enhanced packet blocks")
         offset += block_length
 
 
@@ -287,19 +329,38 @@ def verify_ttl(path, board):
     matches = []
     board_bytes = socket.inet_aton(board)
     for frame in iter_pcapng_packets(path):
-        if len(frame) < 42 or frame[12:14] != b"\x08\x00":
+        if len(frame) < 34 or frame[12:14] != b"\x08\x00":
             continue
         ip_offset = 14
         header_length = (frame[ip_offset] & 0x0F) * 4
-        if header_length < 20 or len(frame) < ip_offset + header_length + 8:
+        if frame[ip_offset] >> 4 != 4 or header_length < 20:
             continue
         if frame[ip_offset + 9] != socket.IPPROTO_UDP:
             continue
         if frame[ip_offset + 12:ip_offset + 16] != board_bytes:
             continue
+        if len(frame) < ip_offset + header_length + 8:
+            raise RuntimeError("Truncated captured board UDP header")
+        fragment = struct.unpack_from("!H", frame, ip_offset + 6)[0]
+        if fragment & 0x3FFF:
+            raise RuntimeError("Fragmented board UDP packets cannot establish TTL evidence")
         udp_offset = ip_offset + header_length
-        source_port = struct.unpack("!H", frame[udp_offset:udp_offset + 2])[0]
-        if source_port == PORT:
+        source_port, destination_port, udp_length = struct.unpack_from("!HHH", frame, udp_offset)
+        if source_port != PORT or destination_port != PORT:
+            continue
+        total_length = struct.unpack_from("!H", frame, ip_offset + 2)[0]
+        if (total_length < header_length + 8 or
+                len(frame) < ip_offset + total_length or
+                udp_length < 20 or udp_length != total_length - header_length):
+            raise RuntimeError("Truncated or inconsistent captured IPv4/UDP lengths")
+        payload = frame[udp_offset + 8:udp_offset + udp_length]
+        if not struct.unpack_from("!H", payload, 2)[0] & 0x8000:
+            continue
+        try:
+            _, records = parse_message(payload)
+        except ValueError as error:
+            raise RuntimeError("Malformed captured mDNS response") from error
+        if records:
             matches.append(frame[ip_offset + 8])
     if not matches:
         raise RuntimeError("No board mDNS responses were found in the capture")
@@ -372,6 +433,7 @@ def self_test():
             + magic
             + struct.pack(byte_order + "HHqI", 1, 0, -1, section_length)
         )
+        interface = struct.pack(byte_order + "IIHHII", 1, 20, 1, 0, 65535, 20)
         packet_length = 36
         packet = (
             struct.pack(
@@ -382,7 +444,7 @@ def self_test():
             + padding
             + struct.pack(byte_order + "I", packet_length)
         )
-        if list(iter_pcapng_data(section + packet)) != [payload]:
+        if list(iter_pcapng_data(section + interface + packet)) != [payload]:
             raise RuntimeError(
                 f"PCAPNG parser self-test failed for byte order {byte_order}"
             )

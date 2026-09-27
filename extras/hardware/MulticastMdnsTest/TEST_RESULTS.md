@@ -36,10 +36,12 @@ sketch is retained.
   report was added.
 - Run window: 2026-09-27 21:12:35 through 21:14:03, UTC+08:00.
 
-Invocation, with host-specific executable paths supplied:
+Reproduction command at the current location, with host-specific paths supplied.
+The suite was subsequently moved from `tests/hardware` to `extras/hardware` to
+comply with Arduino library rule LD003:
 
 ```powershell
-& .\tests\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
+& .\extras\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
     -Action Run -Port COM3 `
     -ArduinoCli $ArduinoCliPath `
     -SdkRoot $SdkCheckout `
@@ -109,3 +111,40 @@ Raw serial/network logs and the firmware backup remain under the ignored
 `.hardware-results` directory. They are intentionally not committed: logs
 contain LAN information and a firmware backup may contain private configuration.
 This report omits Wi-Fi names, IP addresses and private firmware contents.
+
+## Review follow-up validation
+
+The probe was subsequently hardened against false qualification:
+
+- PCAPNG packet lengths cannot consume trailers, padding beyond their declared
+  packet, or the next block. Section/interface metadata and Ethernet link type
+  are checked; truncated or unsupported packet blocks are rejected.
+- Captured IPv4/UDP lengths must describe a complete, unfragmented datagram.
+  TTL evidence requires UDP source/destination port 5353 and a nonempty,
+  structurally valid DNS response. Queries cannot establish or contaminate
+  response TTL evidence.
+- Live responses require source port 5353. DNS name expansion, compression,
+  supported RDATA lengths and trailing-data boundaries are checked.
+
+Before the fixes, the new regressions reproduced 17 failures and 1 error.
+Afterward all **18 Python tests** and the probe self-test passed. The
+PowerShell safety tests remained unchanged. A clean source export also passed
+Arduino Lint 1.3.0 with no errors; the pre-existing reserved-name warning
+LP012 remains. Manual tools/sketches now live under `extras/hardware` to
+satisfy library layout rule LD003.
+
+The hardened live probe was rechecked on the same board after Wi-Fi rejoin,
+using the previously verified firmware fixture. The fixture hash and unchanged
+library source hashes were checked before reuse; only the host-side probe had
+changed. It again reported the 50-byte A response and 317-byte service response
+shown above. The final retest result was `functional-probe-retest-passed`.
+The original firmware was again restored and the complete internal flash
+verified. No SDK repository operation was required for this retest.
+
+One preliminary retest's external launcher could not select a unique Python
+executable. It failed rather than claiming success, restored the firmware, and
+was corrected to preflight the selected interpreter before the successful
+repeat. That launcher is not part of the migrated runner.
+
+These fixes and synthetic TTL tests do **not** change the physical TTL status:
+real IPv4 TTL capture remains unverified, and `hardwareQualified` remains false.

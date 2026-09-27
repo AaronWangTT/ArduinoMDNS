@@ -24,7 +24,7 @@ These host tools are not dependencies of embedded builds.
 
 ## AZ3166 manual hardware validation
 
-The [manual hardware test guide](tests/hardware/MulticastMdnsTest/README.md)
+The [manual hardware test guide](extras/hardware/MulticastMdnsTest/README.md)
 describes compile-only verification, explicit upload/run, network probing,
 and optional elevated TTL capture against this library checkout using the
 Core-provided `AZ3166MulticastUDP` transport.

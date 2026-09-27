@@ -8,6 +8,10 @@ The matching
 from the AZ3166 Core; the mDNS implementation must come from **this repository**.
 No Core packaging implementation is copied into ArduinoMDNS.
 
+The suite lives under `extras` because Arduino library rule LD003 requires
+sketches to be under `examples` or `extras`. It is a manual test fixture, not
+a registration-only example.
+
 See [the recorded test results](TEST_RESULTS.md) for the real-board functional
 run, firmware restoration, and explicitly unverified TTL/hardware limits.
 
@@ -32,7 +36,7 @@ run, firmware restoration, and explicitly unverified TTL/hardware limits.
 From this repository root:
 
 ```powershell
-& .\tests\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
+& .\extras\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
     -ArduinoCli C:\tools\arduino-cli.exe
 ```
 
@@ -43,7 +47,7 @@ An explicit `-Port` does not enable uploads by itself.
 Use a compatible SDK checkout without modifying or installing it:
 
 ```powershell
-& .\tests\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
+& .\extras\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
     -Action Verify `
     -ArduinoCli C:\tools\arduino-cli.exe `
     -SdkRoot C:\STM32F412\devkit-sdk `
@@ -73,7 +77,7 @@ runner fails closed; inspect `compile.log`.
 ## Explicit hardware run
 
 ```powershell
-& .\tests\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
+& .\extras\hardware\MulticastMdnsTest\Test-MulticastMdnsHardware.ps1 `
     -Action Run -Port COM3 `
     -ArduinoCli C:\tools\arduino-cli.exe `
     -SdkRoot C:\STM32F412\devkit-sdk
@@ -117,12 +121,19 @@ named removal and supported English status formats, or independently collect
 a pcapng and validate it with:
 
 ```powershell
-python .\tests\hardware\MulticastMdnsTest\mdns_probe.py `
+python .\extras\hardware\MulticastMdnsTest\mdns_probe.py `
     --board 192.168.1.50 --pcap .\board-mdns.pcapng
 ```
 
 An external capture result is separate evidence; it does not retroactively
 turn the runner's skipped result into full qualification.
+
+TTL validation accepts only complete, unfragmented Ethernet/IPv4 DNS responses
+from the board on UDP source and destination port 5353. Queries and empty DNS
+responses cannot establish evidence. PCAPNG section/interface metadata,
+enhanced packet block lengths, IPv4/UDP lengths, DNS names and RDATA boundaries
+are validated; malformed or unsupported captures fail rather than reading
+trailers or adjacent blocks as packet data.
 
 ## Evidence and tests
 
@@ -142,7 +153,7 @@ run `-Action Run`, serial access, UAC, uploads or live capture.
 Run the dependency-free PowerShell runner safety tests with:
 
 ```powershell
-pwsh -NoProfile -File .\tests\hardware\MulticastMdnsTest\Test-MdnsHardwareRunner.ps1
+pwsh -NoProfile -File .\extras\hardware\MulticastMdnsTest\Test-MdnsHardwareRunner.ps1
 ```
 
 These parse the scripts, check defaults/library binding and ownership helpers,

@@ -7,6 +7,7 @@ on:
       - "**.h"
       - "utility/**"
       - "tests/**"
+      - "extras/hardware/**"
       - ".github/workflows/host-tests.yml"
   pull_request:
     paths:
@@ -14,6 +15,7 @@ on:
       - "**.h"
       - "utility/**"
       - "tests/**"
+      - "extras/hardware/**"
       - ".github/workflows/host-tests.yml"
   workflow_dispatch:
 
@@ -28,14 +30,14 @@ jobs:
           python-version: "3.12"
       - name: Test network probe without hardware
         run: |
-          python tests\hardware\MulticastMdnsTest\mdns_probe.py --self-test
+          python extras\hardware\MulticastMdnsTest\mdns_probe.py --self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m unittest discover -s tests\hardware\MulticastMdnsTest -p test_mdns_probe.py -v
+          python -m unittest discover -s extras\hardware\MulticastMdnsTest -p test_mdns_probe.py -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Parse hardware PowerShell scripts without running them
         shell: pwsh
         run: |
-          Get-ChildItem tests\hardware\MulticastMdnsTest -Filter *.ps1 | ForEach-Object {
+          Get-ChildItem extras\hardware\MulticastMdnsTest -Filter *.ps1 | ForEach-Object {
             $tokens = $null
             $parseErrors = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -44,7 +46,7 @@ jobs:
           }
       - name: Test hardware runner with synthetic commands
         shell: pwsh
-        run: .\tests\hardware\MulticastMdnsTest\Test-MdnsHardwareRunner.ps1
+        run: .\extras\hardware\MulticastMdnsTest\Test-MdnsHardwareRunner.ps1
   sanitizers:
     runs-on: ubuntu-latest
     timeout-minutes: 15
