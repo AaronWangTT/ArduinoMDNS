@@ -587,6 +587,9 @@ bool failedAnnouncementsAreRetried()
 
     transport.allowSend = true;
     mdns.run();
+    REQUIRE(transport.sends == sendsAfterFailure);
+    testMillis += 1000;
+    mdns.run();
     REQUIRE(transport.sends == sendsAfterFailure + 1);
     return true;
 }
@@ -598,7 +601,7 @@ bool shortWritesFailTheSend()
     REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "az3166") == 1);
     mdns.setNameResolvedCallback(ignoreName);
 
-    transport.shortWriteOnCall = 2;
+    transport.shortWriteOnCall = transport.writes + 1;
     REQUIRE(mdns.resolveName("device", 1000) == 0);
     REQUIRE(mdns.isResolvingName() == 0);
     REQUIRE(transport.sends == 0);
@@ -779,7 +782,7 @@ bool preservesFullCompressionOffsets()
     lastServicePort = 0;
 
     std::vector<uint8_t> packet;
-    writeHeader(packet, 1, 1, 2);
+    writeHeader(packet, 2, 1, 2);
     packet.push_back(3);
     packet.push_back('f');
     packet.push_back('o');
@@ -792,25 +795,43 @@ bool preservesFullCompressionOffsets()
     append16(packet, 1);
     append16(packet, 1);
 
-    appendPointer(packet, 12);
+    const uint16_t serviceTypeOffset = static_cast<uint16_t>(packet.size());
+    REQUIRE(serviceTypeOffset > 255);
+    const uint8_t serviceType[] = {
+        5, '_', 'h', 't', 't', 'p', 4, '_', 't', 'c', 'p',
+        5, 'l', 'o', 'c', 'a', 'l', 0
+    };
+    packet.insert(packet.end(), serviceType, serviceType + sizeof(serviceType));
+    append16(packet, 12);
+    append16(packet, 1);
+
+    appendPointer(packet, serviceTypeOffset);
     append16(packet, 12);
     append16(packet, 1);
     append32(packet, 120);
-    append16(packet, 2);
+    append16(packet, 6);
     uint16_t ptrNameOffset = static_cast<uint16_t>(packet.size());
-    appendPointer(packet, 12);
+    packet.push_back(3);
+    packet.push_back('f');
+    packet.push_back('o');
+    packet.push_back('o');
+    appendPointer(packet, serviceTypeOffset);
     REQUIRE(ptrNameOffset > 255);
 
-    appendPointer(packet, 12);
+    appendPointer(packet, ptrNameOffset);
     append16(packet, 33);
     append16(packet, 1);
     append32(packet, 120);
-    append16(packet, 8);
+    append16(packet, 20);
     append16(packet, 0);
     append16(packet, 0);
     append16(packet, 80);
-    const uint16_t targetOffset = 0x0123;
-    appendPointer(packet, targetOffset);
+    const uint16_t targetOffset = static_cast<uint16_t>(packet.size());
+    REQUIRE(targetOffset > 255);
+    const uint8_t target[] = {
+        6, 'd', 'e', 'v', 'i', 'c', 'e', 5, 'l', 'o', 'c', 'a', 'l', 0
+    };
+    packet.insert(packet.end(), target, target + sizeof(target));
 
     appendPointer(packet, targetOffset);
     append16(packet, 1);
@@ -840,6 +861,68 @@ bool preservesFullCompressionOffsets()
     mdns.run();
     REQUIRE(serviceCallbacks == 0);
     callbackMdns = NULL;
+    return true;
+}
+
+bool transportLifecycleAndDelayPolicy()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    testMillis = 0;
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "first") == 1);
+    REQUIRE(testMillis == 0);
+    REQUIRE(mdns.addServiceRecord("first._http", 80, MDNSServiceTCP) == 1);
+    mdns.setNameResolvedCallback(ignoreName);
+    mdns.setServiceFoundCallback(ignoreService);
+    REQUIRE(mdns.resolveName("device", 0) == 1);
+    REQUIRE(mdns.startDiscoveringService("_http", MDNSServiceTCP, 0) == 1);
+    int beforeEnd = transport.sends;
+    mdns.end();
+    REQUIRE(!transport.open);
+    REQUIRE(transport.sends == beforeEnd + 1);
+    REQUIRE(!mdns.isResolvingName() && !mdns.isDiscoveringService());
+    REQUIRE(mdns.announce() == 0);
+    beforeEnd = transport.sends;
+    mdns.end();
+    REQUIRE(transport.sends == beforeEnd);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 11), "second") == 1);
+    REQUIRE(mdns.announce() == 1);
+    REQUIRE(transport.sends == beforeEnd + 1);
+    REQUIRE(mdns.addServiceRecord("second._http", 80, MDNSServiceTCP) == 1);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 12), "third") == 1);
+    int beforeAnnounce = transport.sends;
+    REQUIRE(mdns.announce() == 1);
+    REQUIRE(transport.sends == beforeAnnounce + 1);
+
+    PacketTransport delayedTransport;
+    MDNS delayed(delayedTransport);
+    REQUIRE(delayed.begin(IPAddress(192, 0, 2, 13)) == 1);
+    REQUIRE(testMillis >= 3000);
+    return true;
+}
+
+bool announceCoversHostAndEveryService()
+{
+    PacketTransport transport;
+    MDNS mdns(transport, false);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "device") == 1);
+    REQUIRE(mdns.addServiceRecord("web._http", 80, MDNSServiceTCP) == 1);
+    REQUIRE(mdns.addServiceRecord("other._http", 81, MDNSServiceTCP) == 1);
+    int before = transport.sends;
+    REQUIRE(mdns.announce() == 1);
+    REQUIRE(transport.sends == before + 3);
+    transport.allowSend = false;
+    before = transport.sends;
+    REQUIRE(mdns.announce() == 0);
+    REQUIRE(mdns.lastError() == MDNSSocketError);
+    REQUIRE(transport.sends == before + 3);
+    mdns.end();
+    REQUIRE(!transport.open);
+    REQUIRE(mdns.begin(IPAddress(192, 0, 2, 10), "device") == 1);
+    transport.allowSend = true;
+    before = transport.sends;
+    REQUIRE(mdns.announce() == 1);
+    REQUIRE(transport.sends == before + 1);
     return true;
 }
 
@@ -873,6 +956,8 @@ int main()
         {"invalid SRV target is rejected", invalidSrvTargetIsRejected},
         {"malformed TXT record is rejected", malformedTxtRecordIsRejected},
         {"preserves full compression offsets", preservesFullCompressionOffsets},
+        {"transport lifecycle and delay policy", transportLifecycleAndDelayPolicy},
+        {"announce covers host and every service", announceCoversHostAndEveryService},
     };
 
     int failures = 0;

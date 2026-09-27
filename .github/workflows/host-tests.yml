@@ -3,25 +3,51 @@ name: Host Tests
 on:
   push:
     paths:
-      - ".github/workflows/host-tests.yml"
-      - "tests/host/**"
+      - "**.cpp"
+      - "**.h"
       - "utility/**"
-      - "ArduinoMDNS.h"
-      - "MDNS.cpp"
-      - "MDNS.h"
-      - "MDNSTransport.h"
+      - "tests/**"
+      - ".github/workflows/host-tests.yml"
   pull_request:
     paths:
-      - ".github/workflows/host-tests.yml"
-      - "tests/host/**"
+      - "**.cpp"
+      - "**.h"
       - "utility/**"
-      - "ArduinoMDNS.h"
-      - "MDNS.cpp"
-      - "MDNS.h"
-      - "MDNSTransport.h"
+      - "tests/**"
+      - ".github/workflows/host-tests.yml"
   workflow_dispatch:
 
 jobs:
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify historical query baseline
+        env:
+          MDNS_BASELINE_ONLY: "1"
+        run: bash tests/run-tests.sh
+      - name: Deterministic regression and property tests
+        run: bash tests/run-tests.sh
+      - name: Regression and allocation tests with AVR resource limits
+        env:
+          MDNS_AVR_LIMITS: "1"
+        run: bash tests/run-tests.sh
+      - name: Seeded parser and stateful UDP fuzzing
+        env:
+          CXX: clang++
+          MDNS_FUZZ_SECONDS: "60"
+          MDNS_BUILD_DIR: ${{ runner.temp }}/mdns-fuzz
+        run: bash tests/run-fuzz.sh
+      - name: Preserve fuzz corpus and failure artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mdns-fuzz
+          path: ${{ runner.temp }}/mdns-fuzz
+          if-no-files-found: ignore
   test:
     runs-on: ubuntu-latest
 

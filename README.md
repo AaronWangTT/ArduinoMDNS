@@ -8,6 +8,20 @@ mDNS library for Arduino. Based on [@TrippyLighting](https://github.com/TrippyLi
 
 Supports mDNS (registering services) and DNS-SD (service discovery).
 
+## Bounded parsing and API compatibility
+
+See the [hardening design](docs/mdns-parser-hardening-design.md) for the
+parser boundaries, staged implementation, and validation gates.
+The [API migration guide](docs/bounded-api-migration.md) documents binary TXT,
+callback lifetimes, error reporting, resource limits, and intentional changes
+to malformed-input handling.
+
+Host regressions, allocation-failure tests, and deterministic properties run
+with `bash tests/run-tests.sh` on Linux or WSL using GCC and ASan/UBSan.
+Coverage-guided fuzzing runs with `bash tests/run-fuzz.sh` using Clang; set
+`MDNS_FUZZ_SECONDS=3600` for the one-hour-per-target release run.
+These host tools are not dependencies of embedded builds.
+
 ## HomeTemperature fork
 
 Release 1.1.1 is maintained for

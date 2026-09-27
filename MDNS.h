@@ -46,7 +46,11 @@ typedef enum _MDNSError_t {
    MDNSAlreadyProcessingQuery = -4,
    MDNSNotFound = -5,
    MDNSServerError = -6,
-   MDNSTimedOut = -7
+   MDNSTimedOut = -7,
+   MDNSMalformedPacket = -8,
+   MDNSResourceLimit = -9,
+   MDNSConflictingRecords = -10,
+   MDNSUnrepresentableName = -11
 } MDNSError_t;
 
 typedef struct _MDNSDataInternal_t {
@@ -67,11 +71,32 @@ typedef struct _MDNSServiceRecord_t {
    uint8_t*                name;
    uint8_t*                servName;
    uint8_t*                textContent;
+   size_t                  textLength;
 } MDNSServiceRecord_t;
 
 typedef void (*MDNSNameFoundCallback)(const char*, IPAddress);
 typedef void (*MDNSServiceFoundCallback)(const char*, MDNSServiceProtocol_t, const char*,
                                          IPAddress, unsigned short, const char*);
+typedef void (*MDNSServiceFoundBinaryCallback)(const char*, MDNSServiceProtocol_t,
+                                               const char*, IPAddress, unsigned short,
+                                               const uint8_t*, size_t);
+
+#ifndef MDNS_MAX_PACKET_SIZE
+#if defined(ARDUINO_ARCH_AVR) || defined(__AVR__)
+#define MDNS_MAX_PACKET_SIZE 512
+#else
+#define MDNS_MAX_PACKET_SIZE 1472
+#endif
+#endif
+#ifndef MDNS_MAX_TXT_SIZE
+#define MDNS_MAX_TXT_SIZE 128
+#endif
+#if MDNS_MAX_PACKET_SIZE < 12 || MDNS_MAX_PACKET_SIZE > 32767
+#error MDNS_MAX_PACKET_SIZE must fit a positive 16-bit UDP read length
+#endif
+#if MDNS_MAX_TXT_SIZE < 1 || MDNS_MAX_TXT_SIZE > MDNS_MAX_PACKET_SIZE
+#error MDNS_MAX_TXT_SIZE must be positive and no larger than MDNS_MAX_PACKET_SIZE
+#endif
 
 #define  NumMDNSServiceRecords   (8)
 
@@ -79,61 +104,48 @@ typedef void (*MDNSServiceFoundCallback)(const char*, MDNSServiceProtocol_t, con
 class MDNS
 {
 private:
-   MDNS(const MDNS&) = delete;
-   MDNS& operator=(const MDNS&) = delete;
-
-   MDNSTransport         _transport;
-   MDNSTransport*        _udp;
-   bool                  _waitForNetworkHardware;
-   bool                  _writeFailed;
-   IPAddress             _ipAddress;
-   MDNSDataInternal_t    _mdnsData;
-   MDNSState_t           _state;
-   uint8_t*             _name;
+   struct Query {
+      uint8_t* name;
+      char* display;
+      uint32_t started, duration, attempted, sent, generation;
+      MDNSServiceProtocol_t proto;
+   };
+   MDNSTransport _udp;
+   bool _waitForNetworkHardware;
+   IPAddress _ipAddress;
+   uint8_t* _name;
    MDNSServiceRecord_t* _serviceRecords[NumMDNSServiceRecords];
-   unsigned long        _lastAnnounceMillis;
-   
-   uint8_t*             _resolveNames[2];
-   unsigned long        _resolveLastSendMillis[2];
-   unsigned long        _resolveTimeouts[2];
-   
-   MDNSServiceProtocol_t _resolveServiceProto;
-   
-   MDNSNameFoundCallback      _nameFoundCallback;
-   MDNSServiceFoundCallback   _serviceFoundCallback;
+   Query _queries[2];
+   uint32_t _lastAnnounceMillis, _lastAnnounceAttempt;
+   bool _available, _running;
+   MDNSError_t _error;
+   MDNSNameFoundCallback _nameFoundCallback;
+   MDNSServiceFoundCallback _serviceFoundCallback;
+   MDNSServiceFoundBinaryCallback _binaryCallback;
 
    void _initialize();
-
-   MDNSError_t _processMDNSQuery();
-   MDNSError_t _sendMDNSMessage(uint32_t peerAddress, uint32_t xid, int type, int serviceRecord);
-
-
-   bool _writeBytes(const uint8_t* buffer, size_t size);
-   void _writeDNSName(const uint8_t* name, uint16_t* pPtr, uint8_t* buf, int bufSize,
-                      int zeroTerminate);
-   void _writeMyIPAnswerRecord(uint16_t* pPtr, uint8_t* buf, int bufSize);
-   void _writeServiceRecordName(int recordIndex, uint16_t* pPtr, uint8_t* buf, int bufSize, int tld);
-   void _writeServiceRecordPTR(int recordIndex, uint16_t* pPtr, uint8_t* buf, int bufSize,
-                               uint32_t ttl);
-   
-   int _initQuery(uint8_t idx, const char* name, unsigned long timeout);
+   void _release(bool goodbye);
+   void _resetError();
+   void _fail(MDNSError_t error);
+   bool _recover();
+   bool _send(const uint8_t* data, size_t length);
+   bool _sendQuery(uint8_t idx);
+   bool _sendRecord(int idx, uint32_t ttl, uint16_t xid = 0);
+   void _receive();
+   void _process(const uint8_t* data, size_t length);
+   void _respond(const uint8_t* data, size_t length, size_t nameCapacity);
+   int _initQuery(uint8_t idx, const char* name, MDNSServiceProtocol_t proto,
+                  unsigned long timeout);
    void _cancelQuery(uint8_t idx);
-   
-   uint8_t* _findFirstDotFromRight(const uint8_t* str);
-   
-   void _removeServiceRecord(int idx);
-   
-   int _matchStringPart(const uint8_t** pCmpStr, int* pCmpLen, const uint8_t* buf,
-                        int dataLen);
-   
-   const uint8_t* _postfixForProtocol(MDNSServiceProtocol_t proto);
-   
-   void _finishedResolvingName(char* name, const byte ipAddr[4]);
+   void _finishName(const uint8_t* address);
+   void _timeoutService();
+   void _removeServiceRecord(int idx, bool goodbye);
+   MDNS(const MDNS&);
+   MDNS& operator=(const MDNS&);
 public:
    template <typename Transport>
    MDNS(Transport& udp, bool waitForNetworkHardware = true)
-      : _transport(udp),
-        _udp(&_transport),
+      : _udp(udp),
         _waitForNetworkHardware(waitForNetworkHardware)
    {
       _initialize();
@@ -151,6 +163,8 @@ public:
    int addServiceRecord(const char* name, uint16_t port, MDNSServiceProtocol_t proto);
    int addServiceRecord(const char* name, uint16_t port, MDNSServiceProtocol_t proto,
                         const char* textContent);
+   int addServiceRecord(const char* name, uint16_t port, MDNSServiceProtocol_t proto,
+                        const uint8_t* txtData, size_t txtLength);
    
    void removeServiceRecord(uint16_t port, MDNSServiceProtocol_t proto);
    void removeServiceRecord(const char* name, uint16_t port, MDNSServiceProtocol_t proto);
@@ -163,10 +177,12 @@ public:
    int isResolvingName();
    
    void setServiceFoundCallback(MDNSServiceFoundCallback newCallback);
+   void setServiceFoundBinaryCallback(MDNSServiceFoundBinaryCallback newCallback);
    int startDiscoveringService(const char* serviceName, MDNSServiceProtocol_t proto,
                                unsigned long timeout);
    void stopDiscoveringService();
    int isDiscoveringService();
+   MDNSError_t lastError() const { return _error; }
 };
 
 #endif // __MDNS_H__

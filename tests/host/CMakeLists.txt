@@ -8,6 +8,7 @@ add_executable(
   arduino-mdns-parser-test
   mdns/ArduinoMdnsParserTest.cpp
   ../../MDNS.cpp
+  ../../utility/DnsPacket.cpp
   ../../utility/EthernetUtil.c
 )
 
